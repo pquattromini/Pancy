@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sfondo dell'app e della schermata di avvio (tema chiaro) -->
+    <color name="sfondo_avvio">#FBF6F4</color>
+    <!-- Cerchio dietro l'icona, all'avvio e nell'icona dell'app -->
+    <color name="sfondo_icona">#FBE3EA</color>
+</resources>
