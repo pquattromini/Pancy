@@ -54,28 +54,30 @@ import java.util.UUID
 
 private val frasi = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences)
 
-/** Nuovo appuntamento ([id] null) o modifica di uno esistente. */
+/** Nuovo appuntamento ([id] null, eventualmente già compilato con [bozza]) o modifica di uno esistente. */
 @Composable
-fun ModificaScreen(m: Model, id: String?, snack: SnackbarHostState) {
+fun ModificaScreen(m: Model, id: String?, bozza: Appuntamento?, snack: SnackbarHostState) {
     val cs = MaterialTheme.colorScheme
     val originale = remember(id) { id?.let { m.trova(it) } }
     val nuovoId = rememberSaveable { UUID.randomUUID().toString() }
 
-    var tipo by rememberSaveable { mutableStateOf(originale?.tipo ?: Tipo.VISITA) }
-    var titolo by rememberSaveable { mutableStateOf(originale?.titolo ?: "") }
-    var data by rememberSaveable { mutableStateOf(originale?.data ?: LocalDate.now().plusDays(1)) }
+    // valori di partenza: l'appuntamento da modificare, oppure la bozza, oppure un appuntamento vuoto
+    val base = remember(id) { originale ?: bozza ?: Appuntamento(id = nuovoId) }
+    var tipo by rememberSaveable { mutableStateOf(base.tipo) }
+    var titolo by rememberSaveable { mutableStateOf(base.titolo) }
+    var data by rememberSaveable { mutableStateOf(if (originale != null || bozza != null) base.data else LocalDate.now().plusDays(1)) }
     var conOra by rememberSaveable { mutableStateOf(originale == null || originale.ora != null) }
-    var oraScelta by rememberSaveable { mutableStateOf(originale?.ora ?: LocalTime.of(9, 0)) }
-    var luogo by rememberSaveable { mutableStateOf(originale?.luogo ?: "") }
-    var medico by rememberSaveable { mutableStateOf(originale?.medico ?: "") }
-    var note by rememberSaveable { mutableStateOf(originale?.note ?: "") }
-    var esito by rememberSaveable { mutableStateOf(originale?.esito ?: "") }
+    var oraScelta by rememberSaveable { mutableStateOf(base.ora ?: LocalTime.of(9, 0)) }
+    var luogo by rememberSaveable { mutableStateOf(base.luogo) }
+    var medico by rememberSaveable { mutableStateOf(base.medico) }
+    var note by rememberSaveable { mutableStateOf(base.note) }
+    var esito by rememberSaveable { mutableStateOf(base.esito) }
 
     var sceltaData by remember { mutableStateOf(false) }
     var sceltaOra by remember { mutableStateOf(false) }
     var chiediUscita by remember { mutableStateOf(false) }
 
-    fun costruisci(): Appuntamento = (originale ?: Appuntamento(id = nuovoId)).copy(
+    fun costruisci(): Appuntamento = base.copy(
         tipo = tipo,
         titolo = titolo.trim().ifEmpty { tipo.nome },
         data = data,
@@ -86,20 +88,16 @@ fun ModificaScreen(m: Model, id: String?, snack: SnackbarHostState) {
         esito = esito.trim(),
     )
 
-    val modificato =
-        if (originale != null) costruisci() != originale
-        else titolo.isNotBlank() || luogo.isNotBlank() || medico.isNotBlank() || note.isNotBlank() || esito.isNotBlank()
+    val iniziale = remember(id) { costruisci() }
+    val modificato = costruisci() != iniziale
 
     fun salvaEdEsci() {
         val a = costruisci()
         m.salva(a)
         if (m.messaggio == null) m.messaggio = if (originale == null) "Appuntamento aggiunto." else "Modifiche salvate."
-        if (originale == null) {
-            m.scheda = if (a.passato()) 1 else 0
-            m.schermata = Schermata.Lista
-        } else {
-            m.schermata = Schermata.Dettaglio(a.id)
-        }
+        // un nuovo appuntamento aggiunto dall'agenda: mostra la scheda giusta (in programma o passati)
+        if (originale == null && m.sezione == Sezione.AGENDA) m.scheda = if (a.passato()) 1 else 0
+        m.indietro()
     }
 
     // con modifiche non salvate, "indietro" chiede prima conferma

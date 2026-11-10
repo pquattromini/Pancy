@@ -31,7 +31,17 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -223,4 +233,53 @@ fun SceltaOra(iniziale: LocalTime, onScelta: (LocalTime) -> Unit, onChiudi: () -
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { TimePicker(state = stato) }
         },
     )
+}
+
+/** Riquadro con un titolo che si apre e si chiude toccandolo. */
+@Composable
+fun Espandibile(titolo: String, apertoAllInizio: Boolean = false, sotto: String? = null, content: @Composable ColumnScope.() -> Unit) {
+    var aperto by rememberSaveable(titolo) { mutableStateOf(apertoAllInizio) }
+    val cs = MaterialTheme.colorScheme
+    AppCard {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { aperto = !aperto },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(titolo, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                if (sotto != null) {
+                    Text(sotto, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)
+                }
+            }
+            Icon(
+                if (aperto) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (aperto) "Chiudi" else "Apri",
+                tint = cs.onSurfaceVariant,
+            )
+        }
+        if (aperto) {
+            Spacer(Modifier.size(8.dp))
+            content()
+        }
+    }
+}
+
+/** Riga di un elenco puntato; [titolo] (facoltativo) è scritto in grassetto prima del testo. */
+@Composable
+fun RigaElenco(titolo: String?, testo: String) {
+    val cs = MaterialTheme.colorScheme
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text("•", color = cs.primary, fontWeight = FontWeight.Bold, modifier = Modifier.width(16.dp))
+        Text(
+            buildAnnotatedString {
+                if (titolo != null) {
+                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(titolo) }
+                    append(" ")
+                }
+                append(testo)
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f),
+        )
+    }
 }

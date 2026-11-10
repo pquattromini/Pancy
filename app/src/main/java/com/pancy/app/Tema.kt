@@ -6,6 +6,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import java.text.DecimalFormat
+import java.text.DecimalFormatSymbols
+import kotlin.math.abs
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -73,6 +76,33 @@ fun giornoBreve(d: LocalDate): String = d.format(fmtGiornoBreve).removeSuffix(".
 
 /** "9:30" */
 fun orario(t: LocalTime): String = t.format(fmtOra)
+
+private val fmtBreve = DateTimeFormatter.ofPattern("d MMM", IT)
+
+/** "12 dic" */
+fun dataBreve(d: LocalDate): String = d.format(fmtBreve).replace(".", "")
+
+// ---- Numeri, con la virgola ----
+
+/** 64.25 -> "64,3" (con [decimali] = 1); gli zeri finali non si scrivono. */
+fun numero(v: Double, decimali: Int = 1): String {
+    val schema = if (decimali <= 0) "0" else "0." + "#".repeat(decimali)
+    return DecimalFormat(schema, DecimalFormatSymbols(IT)).format(v)
+}
+
+/** "+1,2", "−0,5", "±0". */
+fun conSegno(v: Double, decimali: Int = 1): String {
+    val n = numero(abs(v), decimali)
+    return when {
+        n == "0" -> "±0"
+        v > 0 -> "+$n"
+        else -> "−$n"
+    }
+}
+
+/** Legge un numero scritto con la virgola o con il punto. Null se non è un numero. */
+fun leggiNumero(s: String): Double? =
+    s.trim().replace(',', '.').toDoubleOrNull()?.takeIf { !it.isNaN() && !it.isInfinite() }
 
 /** "Oggi", "Domani", "Tra 5 giorni", "Ieri", "3 giorni fa". */
 fun quando(d: LocalDate, oggi: LocalDate = LocalDate.now()): String {

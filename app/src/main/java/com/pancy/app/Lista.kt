@@ -53,28 +53,6 @@ import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
 
 @Composable
-fun PancyApp() {
-    val ctx = LocalContext.current
-    val m = remember { Model.di(ctx) }
-    val snack = remember { SnackbarHostState() }
-    val msg = m.messaggio
-    LaunchedEffect(msg) {
-        if (msg != null) {
-            snack.showSnackbar(msg)
-            m.messaggio = null
-        }
-    }
-    // "indietro" del telefono: dalle altre schermate si torna alla lista (dalla lista si esce dall'app)
-    BackHandler(enabled = m.schermata != Schermata.Lista) { m.indietro() }
-    when (val s = m.schermata) {
-        Schermata.Lista -> ListaScreen(m, snack)
-        is Schermata.Dettaglio -> DettaglioScreen(m, s.id, snack)
-        is Schermata.Modifica -> ModificaScreen(m, s.id, snack)
-        Schermata.Impostazioni -> ImpostazioniScreen(m, snack)
-    }
-}
-
-@Composable
 fun ListaScreen(m: Model, snack: SnackbarHostState) {
     val cs = MaterialTheme.colorScheme
     val adesso = LocalDateTime.now()
@@ -84,20 +62,11 @@ fun ListaScreen(m: Model, snack: SnackbarHostState) {
     val lista = if (inProgramma) futuri else passati
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Pancy", fontWeight = FontWeight.ExtraBold) },
-                actions = {
-                    IconButton(onClick = { m.schermata = Schermata.Impostazioni }) {
-                        Icon(Icons.Filled.Settings, contentDescription = "Impostazioni")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.background),
-            )
-        },
+        topBar = { BarraSuperiore(m, Sezione.AGENDA.titolo, settimana = false) },
+        bottomBar = { BarraSezioni(m) },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = { m.schermata = Schermata.Modifica(null) },
+                onClick = { m.vai(Schermata.Modifica(null)) },
                 icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                 text = { Text("Nuovo") },
             )
@@ -134,7 +103,7 @@ fun ListaScreen(m: Model, snack: SnackbarHostState) {
                     }
                     item(key = a.id) {
                         AppuntamentoCard(a, m.dpp, prossimo = inProgramma && i == 0) {
-                            m.schermata = Schermata.Dettaglio(a.id)
+                            m.vai(Schermata.Dettaglio(a.id))
                         }
                     }
                 }
@@ -150,7 +119,7 @@ fun GravidanzaCard(m: Model) {
     val dpp = m.dpp
     val oggi = LocalDate.now()
     if (dpp == null) {
-        AppCard(onClick = { m.schermata = Schermata.Impostazioni }) {
+        AppCard(onClick = { m.vai(Schermata.Impostazioni) }) {
             Text("A che settimana siete?", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
                 "Inserisci la data presunta del parto: vedrai la settimana di gravidanza qui e su ogni appuntamento.",

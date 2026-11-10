@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backup automatico (Android 11 e precedenti): tutto tranne foto e video, che superano il limite di 25 MB -->
+<full-backup-content>
+    <exclude domain="file" path="media/" />
+</full-backup-content>

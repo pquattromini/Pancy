@@ -64,7 +64,7 @@ fun apriMappa(ctx: Context, luogo: String): Boolean =
 fun DettaglioScreen(m: Model, id: String, snack: SnackbarHostState) {
     val a = m.trova(id)
     if (a == null) {
-        LaunchedEffect(id) { m.schermata = Schermata.Lista }
+        LaunchedEffect(id) { m.indietro() }
         return
     }
     val cs = MaterialTheme.colorScheme
@@ -82,7 +82,7 @@ fun DettaglioScreen(m: Model, id: String, snack: SnackbarHostState) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { m.schermata = Schermata.Modifica(a.id) }) {
+                    IconButton(onClick = { m.vai(Schermata.Modifica(a.id)) }) {
                         Icon(Icons.Filled.Edit, contentDescription = "Modifica")
                     }
                     IconButton(onClick = { chiediElimina = true }) {
@@ -123,6 +123,28 @@ fun DettaglioScreen(m: Model, id: String, snack: SnackbarHostState) {
                     }
                 }
                 if (a.medico.isNotBlank()) RigaInfo(Icons.Filled.Person, a.medico)
+            }
+
+            if (a.tipo == Tipo.ECOGRAFIA) {
+                val eco = m.ecografiaDi(a.id)
+                AppCard(onClick = {
+                    if (eco != null) m.vai(Schermata.EcoDettaglio(eco.id)) else m.vai(Schermata.EcoModifica(null, a.id))
+                }) {
+                    Text("Risultati dell'ecografia", style = MaterialTheme.typography.labelLarge, color = cs.primary, fontWeight = FontWeight.Bold)
+                    Text(
+                        when {
+                            eco != null -> riassuntoMisure(eco).ifEmpty { "Risultati inseriti." }
+                            a.passato() -> "Aggiungi le misure del referto, il peso stimato e le immagini."
+                            else -> "Dopo l'ecografia potrai aggiungere misure, peso stimato e immagini."
+                        },
+                        style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp),
+                    )
+                    Text(
+                        if (eco != null) "Vedi i risultati ›" else "Aggiungi i risultati ›",
+                        style = MaterialTheme.typography.bodyMedium, color = cs.primary, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
             }
 
             if (a.note.isNotBlank()) {
@@ -184,7 +206,7 @@ fun DettaglioScreen(m: Model, id: String, snack: SnackbarHostState) {
                 TextButton(onClick = {
                     chiediElimina = false
                     m.elimina(a.id)
-                    m.schermata = Schermata.Lista
+                    m.indietro()
                 }) { Text("Elimina") }
             },
             dismissButton = { TextButton(onClick = { chiediElimina = false }) { Text("Annulla") } },

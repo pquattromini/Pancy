@@ -163,10 +163,17 @@ fun ImpostazioniScreen(m: Model, snack: SnackbarHostState) {
             // ---- Dati ----
             TitoloSezione("Dati")
             Text(
-                "Gli appuntamenti (${m.appuntamenti.size} in tutto) sono salvati su questo telefono e rientrano " +
-                    "nel backup automatico di Android. Gli aggiornamenti dell'app li conservano.",
+                "Su questo telefono: ${m.appuntamenti.size} appuntamenti, ${m.ecografie.size} ecografie, " +
+                    "${m.media.size} foto e video, ${m.pesi.size} pesate, ${m.consigli.size} consigli. " +
+                    "Gli aggiornamenti dell'app li conservano.",
                 style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 32.dp),
+            )
+            Text(
+                "Appuntamenti, ecografie, pesi e consigli rientrano nel backup automatico di Android (se è attivo). " +
+                    "Foto e video invece occupano troppo spazio per quel backup e restano solo su questo telefono: " +
+                    "conservate anche gli originali nella galleria.",
+                style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp, bottom = 32.dp),
             )
         }
     }

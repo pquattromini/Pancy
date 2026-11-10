@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cartelle che l'app può passare ad altre app (fotocamera, condivisione) -->
+<paths>
+    <files-path name="media" path="media/" />
+</paths>

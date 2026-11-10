@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sezione Ecografie: onde che partono da un punto, come la sonda dell'ecografo -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M9.17,16.17 A4,4 0 0,1 14.83,16.17 M6.34,13.34 A8,8 0 0,1 17.66,13.34 M3.51,10.51 A12,12 0 0,1 20.49,10.51" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M12,17.5 A1.75,1.75 0 1,0 12,21 A1.75,1.75 0 1,0 12,17.5 Z" />
+</vector>

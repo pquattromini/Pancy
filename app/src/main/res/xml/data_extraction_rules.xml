@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 e successivi: il backup sul cloud esclude foto e video; il passaggio diretto a un nuovo telefono li porta tutti -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="media/" />
+    </cloud-backup>
+</data-extraction-rules>
