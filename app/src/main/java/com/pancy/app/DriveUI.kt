@@ -93,7 +93,7 @@ fun AvvisoDrive(m: Model, modifier: Modifier = Modifier) {
 fun SezioneDrive(m: Model) {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
-    var sceltaCartella by remember { mutableStateOf(0) } // 1 = foto, 2 = ecografie
+    var sceltaCartella by remember { mutableStateOf(0) } // 1 = foto, 2 = ecografie, 3 = referti
     var chiediScollega by remember { mutableStateOf(false) }
     val collega = rememberCollegaDrive(m)
 
@@ -102,7 +102,7 @@ fun SezioneDrive(m: Model) {
         if (!m.driveCollegato) {
             Text("Collega le cartelle di Google Drive", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
             Text(
-                "L'app mostra le foto e le ecografie che tieni su Drive, e quello che aggiungi nell'app finisce anche lì. " +
+                "L'app mostra le foto, le ecografie e i referti che tieni su Drive, e quello che aggiungi nell'app finisce anche lì. " +
                     "Se reinstalli l'app, basta ricollegare Drive per ritrovare tutto.",
                 style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
             )
@@ -135,6 +135,12 @@ fun SezioneDrive(m: Model) {
                 m.nomeCartellaEco.ifEmpty { "Da scegliere (facoltativa)" },
                 icona = null,
             ) { sceltaCartella = 2 }
+            Spacer(Modifier.height(8.dp))
+            CampoScelta(
+                "Cartella dei referti",
+                m.nomeCartellaRef.ifEmpty { "Da scegliere (facoltativa)" },
+                icona = null,
+            ) { sceltaCartella = 3 }
             Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedButton(onClick = { m.sincronizzaDrive(silenzioso = false, subito = true) }, enabled = !m.driveInSync && m.cartellaFoto != null) {
                     Text(if (m.driveInSync) "Sincronizzo…" else "Sincronizza ora")
@@ -155,8 +161,10 @@ fun SezioneDrive(m: Model) {
                 "La sincronizzazione parte da sola quando apri l'app e quando aggiungi o modifichi una foto. " +
                     "Le foto di Drive si scaricano sul telefono solo quando le apri. " +
                     "Se elimini una foto nell'app finisce nel cestino di Drive (si recupera per 30 giorni); " +
-                    "se la elimini su Drive sparisce anche dall'app. Le immagini della cartella delle ecografie " +
-                    "vengono collegate all'ecografia dello stesso giorno, che l'app crea se non c'è ancora.",
+                    "se la elimini su Drive sparisce anche dall'app. Immagini e PDF della cartella delle ecografie " +
+                    "vengono collegati all'ecografia dello stesso giorno, che l'app crea se non c'è ancora. " +
+                    "Nella cartella dei referti ogni PDF diventa un referto, e le foto dello stesso giorno un referto solo. " +
+                    "I PDF si leggono solo dalle cartelle delle ecografie e dei referti.",
                 style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
             )
@@ -164,17 +172,32 @@ fun SezioneDrive(m: Model) {
     }
 
     if (sceltaCartella != 0) {
-        val eco = sceltaCartella == 2
+        val quale = when (sceltaCartella) {
+            2 -> "eco"
+            3 -> "ref"
+            else -> "foto"
+        }
+        val attuale = when (quale) {
+            "eco" -> m.cartellaEco
+            "ref" -> m.cartellaRef
+            else -> m.cartellaFoto
+        }
         ScegliCartellaDrive(
-            titolo = if (eco) "Cartella delle ecografie" else "Cartella delle foto",
-            avviso = if ((eco && m.cartellaEco != null) || (!eco && m.cartellaFoto != null)) {
-                "Cambiando cartella, le foto della cartella di prima escono dall'app (su Drive restano)."
+            titolo = when (quale) {
+                "eco" -> "Cartella delle ecografie"
+                "ref" -> "Cartella dei referti"
+                else -> "Cartella delle foto"
+            },
+            avviso = if (attuale != null) {
+                "Cambiando cartella, i file della cartella di prima escono dall'app (su Drive restano)."
+            } else if (quale == "ref") {
+                "Scegli una cartella diversa da quelle delle foto e delle ecografie, anche nuova e vuota."
             } else {
                 null
             },
             onScelta = { id, nome ->
                 sceltaCartella = 0
-                m.impostaCartellaDrive(eco, id, nome)
+                m.impostaCartellaDrive(quale, id, nome)
             },
             onChiudi = { sceltaCartella = 0 },
         )

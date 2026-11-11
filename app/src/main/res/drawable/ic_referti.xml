@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sezione Referti: un foglio con l'angolo piegato e le righe del testo -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M14,3 L6,3 Q5,3 5,4 L5,20 Q5,21 6,21 L18,21 Q19,21 19,20 L19,8 Z M14,3 L14,8 L19,8 M8.5,12.5 L15.5,12.5 M8.5,16.5 L15.5,16.5" />
+</vector>

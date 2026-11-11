@@ -31,6 +31,7 @@ val DOMANDE_PRONTE = listOf(
     "Cosa dobbiamo prenotare o fare nelle prossime settimane?",
     "Come sta crescendo il bambino secondo le ecografie?",
     "Prepara le domande da fare alla prossima visita.",
+    "Spiegami i risultati degli ultimi esami.",
 )
 
 // ---------------- Conversazioni ----------------
@@ -164,8 +165,11 @@ object OpenAI {
 
 object Assistente {
     private const val MAX_GIRI = 4
-    private const val MAX_IMMAGINI_PER_VOLTA = 6
+    private const val MAX_FILE_PER_VOLTA = 6
     private const val LATO_IMMAGINE = 1600
+    /** OpenAI accetta al massimo 50 MB di file per richiesta: tengo un margine. */
+    private const val MAX_PDF = 10L * 1024 * 1024
+    private const val MAX_PDF_TOTALE = 25L * 1024 * 1024
 
     fun cartellaChat(ctx: Context): File = File(ctx.filesDir, "chat").also { it.mkdirs() }
 
@@ -185,16 +189,16 @@ object Assistente {
         }
     }
 
-    /** L'unico strumento dell'IA: chiedere di vedere alcune foto dell'app. */
+    /** L'unico strumento dell'IA: chiedere di vedere foto o leggere PDF dell'app. */
     private fun strumenti(): JSONArray = JSONArray().put(
         JSONObject()
             .put("type", "function")
-            .put("name", "guarda_immagini")
+            .put("name", "guarda_file")
             .put(
                 "description",
-                "Mostra le foto indicate nell'elenco FOTO E VIDEO dei dati (stampe o schermate delle ecografie, " +
-                    "foto del pancione, referti fotografati). Per i video arriva un fotogramma. " +
-                    "Al massimo $MAX_IMMAGINI_PER_VOLTA codici per volta.",
+                "Mostra i file indicati nei dati: immagini con codice F-… (stampe o schermate delle ecografie, " +
+                    "foto del pancione, referti fotografati; per i video arriva un fotogramma) e documenti PDF con codice D-… " +
+                    "(referti di esami ed ecografie), che arrivano interi da leggere. Al massimo $MAX_FILE_PER_VOLTA codici per volta.",
             )
             .put(
                 "parameters",
@@ -207,7 +211,7 @@ object Assistente {
                             JSONObject()
                                 .put("type", "array")
                                 .put("items", JSONObject().put("type", "string"))
-                                .put("description", "Codici delle immagini, per esempio F-1a2b3c"),
+                                .put("description", "Codici dei file, per esempio F-1a2b3c oppure D-4d5e6f"),
                         ),
                     )
                     .put("required", JSONArray().put("codici"))
@@ -270,9 +274,13 @@ object Assistente {
         return sb.toString().trim()
     }
 
+    /** Nome con cui il PDF arriva all'IA. */
+    private fun nomePdf(m: Media): String =
+        m.didascalia.ifBlank { "documento" }.take(60).replace(Regex("[\\\\/:*?\"<>|\\n]"), " ").trim() + ".pdf"
+
     /**
      * Fa rispondere l'IA all'ultima domanda della conversazione.
-     * [istruzioni] contiene le regole e tutti i dati dell'app; [immagini] collega i codici F-… ai file.
+     * [istruzioni] contiene le regole e tutti i dati dell'app; [immagini] collega i codici F-… e D-… ai file.
      * Bloccante: va chiamata fuori dal thread principale.
      */
     fun rispondi(
@@ -311,6 +319,7 @@ object Assistente {
             input.put(JSONObject().put("role", "user").put("content", parti))
         }
 
+        var pdfInviati = 0L
         for (giro in 1..MAX_GIRI) {
             val corpo = JSONObject()
                 .put("model", modello)
@@ -319,7 +328,7 @@ object Assistente {
                 .put("tools", strumenti())
                 .put("store", false) // OpenAI non conserva la conversazione
                 .put("include", JSONArray().put("reasoning.encrypted_content"))
-            // all'ultimo giro l'IA deve rispondere, non chiedere altre foto
+            // all'ultimo giro l'IA deve rispondere, non chiedere altri file
             if (giro == MAX_GIRI) corpo.put("tool_choice", "none")
             val r = chiama(chiave, corpo)
             val output = r.optJSONArray("output") ?: JSONArray()
@@ -335,7 +344,7 @@ object Assistente {
                 return t
             }
 
-            // l'IA vuole vedere delle foto: rimetto tutto il suo output nel contesto, poi rispondo alle chiamate
+            // l'IA vuole vedere dei file: rimetto tutto il suo output nel contesto, poi rispondo alle chiamate
             for (i in 0 until output.length()) input.put(output.get(i))
             val viste = JSONArray()
             for (c in chiamate) {
@@ -346,22 +355,49 @@ object Assistente {
                 } ?: JSONArray()
                 val trovati = ArrayList<String>()
                 val mancanti = ArrayList<String>()
-                for (k in 0 until minOf(codici.length(), MAX_IMMAGINI_PER_VOLTA)) {
+                val troppoGrandi = ArrayList<String>()
+                for (k in 0 until minOf(codici.length(), MAX_FILE_PER_VOLTA)) {
                     val cod = codici.optString(k).trim()
                     val im = immagini[cod]
                     val f = if (im != null) Galleria.fileLocale(ctx, im) else null
-                    val url = if (im != null && f != null) immagineDataUrl(f, im.video) else null
-                    if (url != null) {
-                        trovati.add(cod)
-                        viste.put(JSONObject().put("type", "input_text").put("text", "Immagine $cod:"))
-                        viste.put(JSONObject().put("type", "input_image").put("image_url", url).put("detail", "auto"))
-                    } else {
+                    if (im == null || f == null) {
                         mancanti.add(cod)
+                    } else if (im.pdf) {
+                        // il PDF intero: OpenAI ne legge il testo e guarda le pagine
+                        val dim = f.length()
+                        if (dim > MAX_PDF || pdfInviati + dim > MAX_PDF_TOTALE) {
+                            troppoGrandi.add(cod)
+                            continue
+                        }
+                        val dati = try { f.readBytes() } catch (e: Exception) { null } catch (e: OutOfMemoryError) { null }
+                        if (dati == null) {
+                            mancanti.add(cod)
+                            continue
+                        }
+                        pdfInviati += dim
+                        trovati.add(cod)
+                        viste.put(JSONObject().put("type", "input_text").put("text", "Documento $cod:"))
+                        viste.put(
+                            JSONObject().put("type", "input_file").put("filename", nomePdf(im))
+                                .put("file_data", "data:$MIME_PDF;base64," + Base64.encodeToString(dati, Base64.NO_WRAP)),
+                        )
+                    } else {
+                        val url = immagineDataUrl(f, im.video)
+                        if (url != null) {
+                            trovati.add(cod)
+                            viste.put(JSONObject().put("type", "input_text").put("text", "Immagine $cod:"))
+                            viste.put(JSONObject().put("type", "input_image").put("image_url", url).put("detail", "auto"))
+                        } else {
+                            mancanti.add(cod)
+                        }
                     }
                 }
                 val esito = buildString {
-                    if (trovati.isNotEmpty()) append("Immagini inviate nel messaggio seguente: ${trovati.joinToString()}.")
+                    if (trovati.isNotEmpty()) append("File inviati nel messaggio seguente: ${trovati.joinToString()}.")
                     if (mancanti.isNotEmpty()) append(" Codici non trovati o non leggibili: ${mancanti.joinToString()}.")
+                    if (troppoGrandi.isNotEmpty()) {
+                        append(" Documenti troppo grandi da inviare insieme agli altri: ${troppoGrandi.joinToString()}.")
+                    }
                 }.trim().ifEmpty { "Nessun codice valido." }
                 input.put(
                     JSONObject().put("type", "function_call_output").put("call_id", c.optString("call_id")).put("output", esito),
@@ -384,16 +420,25 @@ Come rispondere:
 - Rispondi in italiano, in modo chiaro, caldo e concreto. Vai al punto; usa elenchi solo quando aiutano.
 - Qui sotto trovi TUTTI i dati inseriti nell'app. Quando la domanda riguarda la loro gravidanza, basati su questi dati e cita date e valori. Se un dato manca o non è aggiornato, dillo chiaramente invece di inventarlo.
 - Per le domande generali puoi usare le tue conoscenze, ma distingui sempre cosa viene dai loro dati e cosa è un'informazione generale.
-- Se per rispondere ti serve guardare foto o immagini delle ecografie, usa lo strumento guarda_immagini con i codici F-… dell'elenco FOTO E VIDEO. Chiedi solo le immagini che servono davvero.
+- Se per rispondere ti serve guardare foto o immagini delle ecografie, o leggere un referto, usa lo strumento guarda_file con i codici dei dati: F-… per le immagini, D-… per i documenti PDF. Chiedi solo quelli che servono davvero. Quando la domanda riguarda un referto che ha un PDF, leggilo prima di rispondere.
 - Puoi usare il **grassetto** ed elenchi con il trattino, ma niente tabelle.
 
 Limiti importanti:
 - Non sei un medico: non fare diagnosi, non dare dosi di farmaci e non suggerire di cambiare terapie. Per ogni decisione clinica rimanda al medico o all'ostetrica, e aiuta a preparare le domande da fare.
 - Se la domanda descrive un segnale di allarme (perdite di sangue, perdita di liquido, contrazioni regolari prima della 37a settimana, movimenti del bambino diminuiti o assenti, forte mal di testa con disturbi della vista o gonfiore improvviso, febbre alta, dolore forte alla pancia), di' prima di tutto di chiamare subito il punto nascita o il 112.
-- Valori di misure ed ecografie: puoi spiegare cosa misurano e come si leggono in generale, ma il giudizio sul singolo caso spetta a chi ha fatto l'esame."""
+- Valori di misure, ecografie ed esami: puoi spiegare cosa misurano e come si leggono in generale (con i valori di riferimento scritti sul referto, se ci sono), ma il giudizio sul singolo caso spetta al medico."""
 
-    /** Codice breve e stabile di una foto, per lo strumento guarda_immagini. */
-    fun codice(med: Media): String = "F-" + med.id.replace("-", "").take(6)
+    /** Codice breve e stabile di un file, per lo strumento guarda_file: F-… per le immagini, D-… per i PDF. */
+    fun codice(med: Media): String = (if (med.pdf) "D-" else "F-") + med.id.replace("-", "").take(6)
+
+    private fun elencoFile(l: List<Media>): String =
+        l.joinToString(", ") { med ->
+            codice(med) + when {
+                med.pdf -> " (PDF" + (if (med.didascalia.isNotBlank()) " \"${med.didascalia}\"" else "") + ")"
+                med.video -> " (video)"
+                else -> " (foto)"
+            }
+        }
 
     fun immagini(m: Model): Map<String, Media> = m.media.associateBy { codice(it) }
 
@@ -448,13 +493,31 @@ Limiti importanti:
         if (m.ecografie.isEmpty()) appendLine("- Nessuna.")
         for (e in m.ecografie.sortedBy { it.data.toEpochDay() }) {
             val misure = Misura.entries.mapNotNull { mi -> e.misura(mi)?.let { "${mi.nome} (${mi.sigla}) ${mi.formatta(it)}" } }
-            val foto = m.mediaDi(e.id).map { codice(it) }
+            val file = m.mediaDi(e.id)
             appendLine(
                 riga(
                     ISO.format(e.data), e.titolo, sett(m, e.data),
                     if (misure.isEmpty()) "misure: non inserite" else "misure: " + misure.joinToString("; "),
                     e.note.takeIf { it.isNotBlank() }?.let { "note: $it" },
-                    if (foto.isEmpty()) null else "immagini: " + foto.joinToString(", "),
+                    if (file.isEmpty()) null else "file: " + elencoFile(file),
+                ),
+            )
+        }
+        appendLine()
+
+        appendLine("REFERTI ED ESAMI (${m.referti.size})")
+        if (m.referti.isEmpty()) appendLine("- Nessuno.")
+        for (r in m.referti.sortedBy { it.data.toEpochDay() }) {
+            val file = m.fileDi(r.id)
+            val app = r.appuntamento?.let { m.trova(it) }
+            appendLine(
+                riga(
+                    ISO.format(r.data), r.tipo.nome, r.titolo, sett(m, r.data),
+                    r.dove.takeIf { it.isNotBlank() }?.let { "presso: $it" },
+                    r.esito.takeIf { it.isNotBlank() }?.let { "esito: $it" },
+                    r.note.takeIf { it.isNotBlank() }?.let { "note: $it" },
+                    app?.let { "dall'appuntamento «${it.titolo}» del ${ISO.format(it.data)}" },
+                    if (file.isEmpty()) "nessun file" else "file: " + elencoFile(file),
                 ),
             )
         }
@@ -474,9 +537,10 @@ Limiti importanti:
         }
         appendLine()
 
-        appendLine("FOTO E VIDEO (${m.media.size}) — usa questi codici con guarda_immagini")
-        if (m.media.isEmpty()) appendLine("- Nessuna.")
-        for (med in m.media.sortedBy { it.data.toEpochDay() }) {
+        val galleria = m.galleria
+        appendLine("FOTO E VIDEO (${galleria.size}) — usa questi codici con guarda_file")
+        if (galleria.isEmpty()) appendLine("- Nessuna.")
+        for (med in galleria.sortedBy { it.data.toEpochDay() }) {
             val eco = med.ecografia?.let { m.ecografia(it) }
             appendLine(
                 riga(

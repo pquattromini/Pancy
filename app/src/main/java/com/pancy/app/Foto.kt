@@ -56,7 +56,8 @@ fun FotoScreen(m: Model, snack: SnackbarHostState) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
-            if (m.media.isEmpty()) {
+            val galleria = m.galleria
+            if (galleria.isEmpty()) {
                 VuotoSezione(
                     painterResource(R.drawable.ic_foto),
                     "Nessuna foto o video",
@@ -64,18 +65,18 @@ fun FotoScreen(m: Model, snack: SnackbarHostState) {
                         "Tocca «Aggiungi» per sceglierli dalla galleria o scattarli ora.",
                 )
             } else {
-                GrigliaMedia(m, m.media) { m.vai(Schermata.Visore(it.id)) }
+                GrigliaMedia(m, galleria) { m.vai(Schermata.Visore(it.id)) }
             }
         }
     }
 }
 
-/** Barra che avvisa che foto e video si stanno copiando. */
+/** Barra che avvisa che foto, video o PDF si stanno copiando. */
 @Composable
 fun InCopia() {
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text(
-            "Copio foto e video nell'app…", style = MaterialTheme.typography.bodySmall,
+            "Copio i file nell'app…", style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 4.dp))
@@ -120,6 +121,11 @@ fun GrigliaMedia(m: Model, lista: List<Media>, onApri: (Media) -> Unit) {
     }
 }
 
+/** Apre un file toccato in una griglia: i PDF nel loro visore, foto e video a schermo intero. */
+fun Model.apriFile(med: Media, ecografia: String? = null, referto: String? = null) {
+    if (med.pdf) vai(Schermata.Documento(med.id)) else vai(Schermata.Visore(med.id, ecografia, referto))
+}
+
 /** Griglia semplice (non scorrevole da sola), da mettere dentro una pagina che scorre già. */
 @Composable
 fun GrigliaFissa(lista: List<Media>, onApri: (Media) -> Unit) {
@@ -134,28 +140,33 @@ fun GrigliaFissa(lista: List<Media>, onApri: (Media) -> Unit) {
 }
 
 /**
- * Prepara la scelta "galleria / foto / video" e restituisce la funzione che la apre.
- * Le foto e i video scelti vengono copiati nell'app (collegati a [ecografia], se non è null).
+ * Prepara la scelta "PDF / galleria / foto / video" e restituisce la funzione che la apre.
+ * I file scelti vengono copiati nell'app, collegati a [ecografia] o a [referto] se non sono null.
+ * I PDF si possono aggiungere solo a ecografie e referti; ai referti niente video.
  */
 @Composable
-fun rememberAggiuntaMedia(m: Model, ecografia: String?): () -> Unit {
+fun rememberAggiuntaMedia(m: Model, ecografia: String?, referto: String? = null): () -> Unit {
     val ctx = LocalContext.current
+    val conPdf = ecografia != null || referto != null
     var dialogo by remember { mutableStateOf(false) }
     // il file in cui la fotocamera sta scrivendo (salvato anche se Android chiude l'app nel frattempo)
     var inAttesa by rememberSaveable { mutableStateOf<String?>(null) }
 
     val galleria = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
-        m.importa(uris, ecografia)
+        m.importa(uris, ecografia, referto)
+    }
+    val documenti = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        m.importa(uris, ecografia, referto)
     }
     val foto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { _ ->
         val p = inAttesa
         inAttesa = null
-        if (p != null) m.dopoScatto(File(p), video = false, ecografia = ecografia)
+        if (p != null) m.dopoScatto(File(p), video = false, ecografia = ecografia, referto = referto)
     }
     val video = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { _ ->
         val p = inAttesa
         inAttesa = null
-        if (p != null) m.dopoScatto(File(p), video = true, ecografia = ecografia)
+        if (p != null) m.dopoScatto(File(p), video = true, ecografia = ecografia, referto = referto)
     }
 
     fun scatta(eVideo: Boolean) {
@@ -176,17 +187,39 @@ fun rememberAggiuntaMedia(m: Model, ecografia: String?): () -> Unit {
             title = { Text("Aggiungi") },
             text = {
                 Column {
-                    SceltaAggiunta(painterResource(R.drawable.ic_foto), "Scegli dalla galleria", "Anche più foto e video insieme") {
-                        dialogo = false
-                        galleria.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                    if (conPdf) {
+                        SceltaAggiunta(
+                            painterResource(R.drawable.ic_referti), "Scegli un PDF",
+                            "Il referto scaricato dal sito del laboratorio o arrivato per email",
+                        ) {
+                            dialogo = false
+                            try {
+                                documenti.launch(arrayOf(MIME_PDF))
+                            } catch (e: ActivityNotFoundException) {
+                                m.messaggio = "Non trovo un'app per scegliere i file."
+                            }
+                        }
                     }
-                    SceltaAggiunta(painterResource(R.drawable.ic_foto), "Scatta una foto", null) {
+                    SceltaAggiunta(
+                        painterResource(R.drawable.ic_foto), "Scegli dalla galleria",
+                        if (referto != null) "Anche più foto insieme" else "Anche più foto e video insieme",
+                    ) {
+                        dialogo = false
+                        val tipo = if (referto != null) ActivityResultContracts.PickVisualMedia.ImageOnly
+                        else ActivityResultContracts.PickVisualMedia.ImageAndVideo
+                        galleria.launch(PickVisualMediaRequest(tipo))
+                    }
+                    SceltaAggiunta(
+                        painterResource(R.drawable.ic_foto), if (referto != null) "Fotografa il foglio" else "Scatta una foto", null,
+                    ) {
                         dialogo = false
                         scatta(eVideo = false)
                     }
-                    SceltaAggiunta(androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.PlayArrow), "Registra un video", null) {
-                        dialogo = false
-                        scatta(eVideo = true)
+                    if (referto == null) {
+                        SceltaAggiunta(androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.Filled.PlayArrow), "Registra un video", null) {
+                            dialogo = false
+                            scatta(eVideo = true)
+                        }
                     }
                 }
             },

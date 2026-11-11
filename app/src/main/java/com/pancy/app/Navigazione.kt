@@ -18,18 +18,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import java.time.LocalDate
 
 /** Le sezioni della barra in basso, in quest'ordine. Per spostarne una basta spostare la riga. */
 enum class Sezione(val etichetta: String, val titolo: String) {
     AGENDA("Agenda", "Appuntamenti"),
     ECOGRAFIE("Ecografie", "Ecografie"),
+    REFERTI("Referti", "Referti ed esami"),
     FOTO("Foto", "Foto e video"),
     STORICO("Storico", "Storico"),
     CONSIGLI("Consigli", "Consigli"),
@@ -43,11 +46,16 @@ sealed interface Schermata {
     /** [id] null = nuovo appuntamento; [bozza] = valori già compilati (per esempio dal calendario degli esami). */
     data class Modifica(val id: String?, val bozza: Appuntamento? = null) : Schermata
     data object Impostazioni : Schermata
-    /** Foto o video a schermo intero; con [ecografia] si scorrono solo le immagini di quell'ecografia. */
-    data class Visore(val id: String, val ecografia: String? = null) : Schermata
+    /** Foto o video a schermo intero; con [ecografia] o [referto] si scorrono solo le loro immagini. */
+    data class Visore(val id: String, val ecografia: String? = null, val referto: String? = null) : Schermata
+    /** Un PDF, pagina per pagina. */
+    data class Documento(val id: String) : Schermata
     data class EcoDettaglio(val id: String) : Schermata
     /** [id] null = nuova ecografia; [daAppuntamento] = l'appuntamento da cui nasce. */
     data class EcoModifica(val id: String?, val daAppuntamento: String? = null) : Schermata
+    data class RefDettaglio(val id: String) : Schermata
+    /** [id] null = nuovo referto; [daAppuntamento] = l'appuntamento da cui nasce. */
+    data class RefModifica(val id: String?, val daAppuntamento: String? = null) : Schermata
     /** Elenco delle conversazioni con l'IA. */
     data object ChiediIA : Schermata
     /** Una conversazione; [id] null = nuova; [bozza] = domanda già scritta da completare. */
@@ -75,6 +83,7 @@ fun PancyApp() {
             when (s.sezione) {
                 Sezione.AGENDA -> ListaScreen(m, snack)
                 Sezione.ECOGRAFIE -> EcografieScreen(m, snack)
+                Sezione.REFERTI -> RefertiScreen(m, snack)
                 Sezione.FOTO -> FotoScreen(m, snack)
                 Sezione.STORICO -> StoricoScreen(m, snack)
                 Sezione.CONSIGLI -> ConsigliScreen(m, snack)
@@ -83,9 +92,12 @@ fun PancyApp() {
         is Schermata.Dettaglio -> DettaglioScreen(m, s.id, snack)
         is Schermata.Modifica -> ModificaScreen(m, s.id, s.bozza, snack)
         Schermata.Impostazioni -> ImpostazioniScreen(m, snack)
-        is Schermata.Visore -> VisoreScreen(m, s.id, s.ecografia)
+        is Schermata.Visore -> VisoreScreen(m, s.id, s.ecografia, s.referto)
+        is Schermata.Documento -> DocumentoScreen(m, s.id, snack)
         is Schermata.EcoDettaglio -> EcografiaScreen(m, s.id, snack)
         is Schermata.EcoModifica -> EcoModificaScreen(m, s.id, s.daAppuntamento, snack)
+        is Schermata.RefDettaglio -> RefertoScreen(m, s.id, snack)
+        is Schermata.RefModifica -> RefertoModificaScreen(m, s.id, s.daAppuntamento, snack)
         Schermata.ChiediIA -> ChiediIAScreen(m, snack)
         is Schermata.Chat -> ChatScreen(m, s.id, s.bozza, snack)
     }
@@ -128,16 +140,18 @@ fun BarraSuperiore(m: Model, titolo: String, settimana: Boolean = true) {
     )
 }
 
-/** La barra in basso con le sezioni. */
+/** La barra in basso con le sezioni. Sui telefoni stretti le scritte sono un po' più piccole, perché ci stiano tutte e sei. */
 @Composable
 fun BarraSezioni(m: Model) {
+    val stretto = LocalConfiguration.current.screenWidthDp < 400
+    val stile = if (stretto) MaterialTheme.typography.labelSmall.copy(letterSpacing = 0.sp) else MaterialTheme.typography.labelMedium
     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
         for (s in Sezione.entries) {
             NavigationBarItem(
                 selected = m.sezione == s,
                 onClick = { m.apriSezione(s) },
                 icon = { Icon(iconaSezione(s), contentDescription = null) },
-                label = { Text(s.etichetta, maxLines = 1, softWrap = false) },
+                label = { Text(s.etichetta, maxLines = 1, softWrap = false, style = stile, overflow = TextOverflow.Clip) },
             )
         }
     }
@@ -147,6 +161,7 @@ fun BarraSezioni(m: Model) {
 fun iconaSezione(s: Sezione): Painter = when (s) {
     Sezione.AGENDA -> rememberVectorPainter(Icons.Filled.DateRange)
     Sezione.ECOGRAFIE -> painterResource(R.drawable.ic_ecografie)
+    Sezione.REFERTI -> painterResource(R.drawable.ic_referti)
     Sezione.FOTO -> painterResource(R.drawable.ic_foto)
     Sezione.STORICO -> painterResource(R.drawable.ic_storico)
     Sezione.CONSIGLI -> painterResource(R.drawable.ic_consigli)

@@ -8,6 +8,7 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.LruCache
 import android.webkit.MimeTypeMap
 import androidx.compose.foundation.Image
@@ -16,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
@@ -35,6 +38,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +51,7 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Foto e video dell'app: stanno nella cartella "media" della memoria dell'app.
+ * Foto, video e PDF dell'app: stanno nella cartella "media" della memoria dell'app.
  * Si copiano lì (e non si legge dalla galleria) così restano anche se nella galleria vengono cancellati.
  */
 object Galleria {
@@ -75,19 +80,19 @@ object Galleria {
      */
     fun miniaturaDi(ctx: Context, m: Media, lato: Int = 360): Bitmap? {
         val f = file(ctx, m)
-        if (f.exists() && f.length() > 0) return miniatura(f, m.video, lato)
+        if (f.exists() && f.length() > 0) return miniatura(f, m.video, lato, m.pdf)
         val id = m.driveId ?: return null
         val mini = File(cartellaMiniature(ctx), "$id.jpg")
         if (!mini.exists()) {
             val ok = try { Drive.miniatura(ctx, id, mini) } catch (e: Exception) { false }
             if (!ok) {
-                // niente anteprima: per le foto scarico il file intero, per i video rinuncio
+                // niente anteprima: per foto e PDF scarico il file intero, per i video rinuncio
                 if (m.video) return null
                 val intero = fileLocale(ctx, m) ?: return null
-                return miniatura(intero, false, lato)
+                return miniatura(intero, false, lato, m.pdf)
             }
         }
-        return miniatura(mini, false, lato)
+        return miniatura(mini, false, lato, pdf = false)
     }
 
     fun nuovoFile(ctx: Context, estensione: String): File =
@@ -96,21 +101,57 @@ object Galleria {
     /** Indirizzo del file da passare ad altre app (fotocamera, condivisione). */
     fun uri(ctx: Context, f: File): Uri = FileProvider.getUriForFile(ctx, ctx.packageName + ".fileprovider", f)
 
-    /** Copia nell'app una foto o un video scelto dalla galleria. Null se non ci riesce. */
-    fun copia(ctx: Context, uri: Uri, ecografia: String?): Media? {
+    /**
+     * Copia nell'app una foto o un video scelto dalla galleria, o un PDF scelto tra i file.
+     * Per i PDF la didascalia è il nome del file. Null se non ci riesce.
+     */
+    fun copia(ctx: Context, uri: Uri, ecografia: String?, referto: String? = null): Media? {
         val cr = ctx.contentResolver
         val mime = cr.getType(uri) ?: ""
-        val video = mime.startsWith("video")
-        val est = MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: if (video) "mp4" else "jpg"
+        val nome = nomeDi(ctx, uri).orEmpty()
+        val pdf = mime == MIME_PDF || nome.endsWith(".pdf", ignoreCase = true)
+        val video = !pdf && mime.startsWith("video")
+        val est = if (pdf) "pdf" else MimeTypeMap.getSingleton().getExtensionFromMimeType(mime) ?: if (video) "mp4" else "jpg"
         val dest = nuovoFile(ctx, est)
         return try {
             val input = cr.openInputStream(uri) ?: return null
             input.use { i -> dest.outputStream().use { o -> i.copyTo(o) } }
-            Media(file = dest.name, video = video, data = dataScatto(dest, video) ?: LocalDate.now(), ecografia = ecografia)
+            if (pdf && Pdf.pagine(dest) == 0 && !iniziaComePdf(dest)) {
+                dest.delete()
+                return null
+            }
+            Media(
+                file = dest.name,
+                video = video,
+                pdf = pdf,
+                data = (if (pdf) NomeFile.data(nome) else dataScatto(dest, video)) ?: LocalDate.now(),
+                didascalia = if (pdf) NomeFile.titolo(nome) else "",
+                ecografia = ecografia,
+                referto = referto,
+            )
         } catch (e: Exception) {
             dest.delete()
             null
         }
+    }
+
+    /** Un PDF protetto da password non si apre, ma è comunque un PDF: lo riconosco dall'inizio del file. */
+    private fun iniziaComePdf(f: File): Boolean = try {
+        f.inputStream().use { i ->
+            val b = ByteArray(5)
+            i.read(b) == 5 && String(b, Charsets.US_ASCII) == "%PDF-"
+        }
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Il nome del file scelto (per esempio "esami 3 ottobre.pdf"), se l'app che lo fornisce lo dice. */
+    private fun nomeDi(ctx: Context, uri: Uri): String? = try {
+        ctx.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    } catch (e: Exception) {
+        null
     }
 
     /** Il giorno in cui è stata scattata la foto o girato il video, se il file lo dice. */
@@ -170,9 +211,11 @@ object Galleria {
         }
     }
 
-    /** Miniatura quadrata per le griglie: il lato più corto misura circa [lato] pixel. */
-    fun miniatura(f: File, video: Boolean, lato: Int = 360): Bitmap? = try {
-        val b = if (video) {
+    /** Miniatura quadrata per le griglie: il lato più corto misura circa [lato] pixel. Dei PDF, la prima pagina. */
+    fun miniatura(f: File, video: Boolean, lato: Int = 360, pdf: Boolean = f.extension.equals("pdf", ignoreCase = true)): Bitmap? = try {
+        val b = if (pdf) {
+            Pdf.pagina(f, 0, lato)
+        } else if (video) {
             fotogramma(f)
         } else {
             val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -223,13 +266,27 @@ object Galleria {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
     }
 
+    private fun mimeDi(m: Media): String = when {
+        m.pdf -> MIME_PDF
+        m.video -> "video/*"
+        else -> "image/*"
+    }
+
     /** Apre la scelta dell'app con cui condividere (WhatsApp, email...). */
     fun condividi(ctx: Context, m: Media) {
         val i = Intent(Intent.ACTION_SEND)
-            .setType(if (m.video) "video/*" else "image/*")
+            .setType(mimeDi(m))
             .putExtra(Intent.EXTRA_STREAM, uri(ctx, file(ctx, m)))
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         ctx.startActivity(Intent.createChooser(i, "Condividi"))
+    }
+
+    /** Apre il file con un'altra app (per i PDF: il lettore PDF del telefono). Il file deve essere già scaricato. */
+    fun apriConAltraApp(ctx: Context, m: Media) {
+        val i = Intent(Intent.ACTION_VIEW)
+            .setDataAndType(uri(ctx, file(ctx, m)), mimeDi(m))
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        ctx.startActivity(i)
     }
 
     fun elimina(ctx: Context, m: Media) {
@@ -240,7 +297,7 @@ object Galleria {
     }
 }
 
-/** Miniatura quadrata di una foto o di un video (con il simbolo "play"). */
+/** Miniatura quadrata di una foto, di un video (con il simbolo "play") o di un PDF (la prima pagina, con il nome). */
 @Composable
 fun Miniatura(med: Media, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val ctx = LocalContext.current
@@ -261,7 +318,24 @@ fun Miniatura(med: Media, modifier: Modifier = Modifier, onClick: () -> Unit) {
             Image(
                 img, contentDescription = med.didascalia.ifBlank { null },
                 modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+                // dei documenti conta l'inizio della pagina
+                alignment = if (med.pdf) Alignment.TopCenter else Alignment.Center,
             )
+        }
+        if (med.pdf) {
+            Text(
+                "PDF", color = Color.White, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold,
+                modifier = Modifier.align(Alignment.TopStart).padding(5.dp)
+                    .background(Color(0xFFD0453F), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp),
+            )
+            if (med.didascalia.isNotBlank()) {
+                Text(
+                    med.didascalia, color = Color.White, style = MaterialTheme.typography.labelSmall,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.align(Alignment.BottomStart).fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 6.dp, vertical = 3.dp),
+                )
+            }
         }
         if (med.video) {
             Icon(

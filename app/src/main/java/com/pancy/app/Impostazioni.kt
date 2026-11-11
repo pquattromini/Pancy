@@ -249,15 +249,15 @@ fun ImpostazioniScreen(m: Model, snack: SnackbarHostState) {
             TitoloSezione("Dati")
             Text(
                 "Su questo telefono: ${m.appuntamenti.size} appuntamenti, ${m.ecografie.size} ecografie, " +
-                    "${m.media.size} foto e video, ${m.pesi.size} pesate, ${m.consigli.size} consigli, " +
+                    "${m.referti.size} referti, ${m.media.size} file (foto, video e PDF), ${m.pesi.size} pesate, ${m.consigli.size} consigli, " +
                     "${m.conversazioni.size} conversazioni con l'IA. " +
                     "Gli aggiornamenti dell'app li conservano.",
                 style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
             )
             Text(
-                "Appuntamenti, ecografie, pesi, consigli e conversazioni rientrano nel backup automatico di Android (se è attivo). " +
-                    "Foto, video e foto allegate alla chat invece occupano troppo spazio per quel backup e restano solo su questo telefono: " +
-                    "conservate anche gli originali nella galleria.",
+                "Appuntamenti, ecografie, referti, pesi, consigli e conversazioni rientrano nel backup automatico di Android (se è attivo). " +
+                    "Foto, video, PDF e foto allegate alla chat invece occupano troppo spazio per quel backup: " +
+                    "con Google Drive collegato tornano da Drive, altrimenti restano solo su questo telefono.",
                 style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp, bottom = 32.dp),
             )

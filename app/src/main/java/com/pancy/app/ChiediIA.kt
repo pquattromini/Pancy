@@ -87,7 +87,7 @@ fun ChiediIAScreen(m: Model, snack: SnackbarHostState) {
             item(key = "intro") {
                 Text(
                     "Fai una domanda come a un'IA qualsiasi: in più legge tutti i dati dell'app (appuntamenti, ecografie, " +
-                        "pesi, consigli, l'elenco di foto e video) e, quando serve, guarda le immagini.",
+                        "referti, pesi, consigli, l'elenco di foto e video) e, quando serve, guarda le immagini e legge i PDF dei referti.",
                     style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
                 )
             }
@@ -483,7 +483,7 @@ fun SezioneIA(m: Model) {
             ) { Text(if (m.verificaInCorso) "Verifico…" else "Verifica chiave e credito") }
         }
         Text(
-            "Le domande e i dati dell'app, comprese le foto che l'IA chiede di guardare, vengono inviati a OpenAI. " +
+            "Le domande e i dati dell'app, comprese le foto e i PDF che l'IA chiede di guardare, vengono inviati a OpenAI. " +
                 "Di base OpenAI non usa i dati inviati con l'API per addestrare i suoi modelli. " +
                 "La chiave resta solo su questo telefono e non va nel backup.",
             style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,

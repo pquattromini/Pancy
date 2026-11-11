@@ -37,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -56,10 +57,15 @@ import kotlinx.coroutines.withContext
 
 /** Foto e video a schermo intero: si scorre di lato, doppio tocco o due dita per lo zoom. */
 @Composable
-fun VisoreScreen(m: Model, id: String, ecografia: String?) {
+fun VisoreScreen(m: Model, id: String, ecografia: String?, referto: String?) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val lista = if (ecografia != null) m.mediaDi(ecografia) else m.media
+    // i PDF hanno il loro visore (DocumentoScreen)
+    val lista = when {
+        ecografia != null -> m.mediaDi(ecografia).filter { !it.pdf }
+        referto != null -> m.fileDi(referto).filter { !it.pdf }
+        else -> m.galleria
+    }
     if (lista.isEmpty()) {
         LaunchedEffect(Unit) { m.indietro() }
         return
@@ -206,6 +212,30 @@ private fun PaginaFoto(med: Media, onZoom: (Boolean) -> Unit, onTap: () -> Unit)
         }
         if (value == null) fallita = true
     }
+    val b = bmp
+    if (b == null) {
+        Box(
+            Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) },
+            contentAlignment = Alignment.Center,
+        ) {
+            if (fallita) {
+                Text(
+                    "Non riesco ad aprire la foto. Se è su Google Drive, controlla la connessione.",
+                    color = Color.White, modifier = Modifier.padding(32.dp),
+                )
+            } else {
+                CircularProgressIndicator(color = Color.White)
+            }
+        }
+    } else {
+        val img = remember(b) { b.asImageBitmap() }
+        ImmagineZoomabile(img, med.didascalia.ifBlank { null }, onZoom, onTap)
+    }
+}
+
+/** Un'immagine a tutto schermo: doppio tocco o due dita per lo zoom, con lo zoom un dito la sposta. */
+@Composable
+fun ImmagineZoomabile(img: ImageBitmap, descrizione: String?, onZoom: (Boolean) -> Unit = {}, onTap: () -> Unit = {}) {
     var scala by remember { mutableFloatStateOf(1f) }
     var spost by remember { mutableStateOf(Offset.Zero) }
     val zoomato = scala > 1.01f
@@ -246,27 +276,16 @@ private fun PaginaFoto(med: Media, onZoom: (Boolean) -> Unit, onTap: () -> Unit)
             },
         contentAlignment = Alignment.Center,
     ) {
-        val b = bmp
-        if (b == null && fallita) {
-            Text(
-                "Non riesco ad aprire la foto. Se è su Google Drive, controlla la connessione.",
-                color = Color.White, modifier = Modifier.padding(32.dp),
-            )
-        } else if (b == null) {
-            CircularProgressIndicator(color = Color.White)
-        } else {
-            val img = remember(b) { b.asImageBitmap() }
-            Image(
-                img, contentDescription = med.didascalia.ifBlank { null },
-                contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().graphicsLayer {
-                    scaleX = scala
-                    scaleY = scala
-                    translationX = spost.x
-                    translationY = spost.y
-                },
-            )
-        }
+        Image(
+            img, contentDescription = descrizione,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                scaleX = scala
+                scaleY = scala
+                translationX = spost.x
+                translationY = spost.y
+            },
+        )
     }
 }
 

@@ -136,7 +136,9 @@ fun EcografieScreen(m: Model, snack: SnackbarHostState) {
 private fun EcografiaCard(m: Model, e: Ecografia, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val colore = Tipo.ECOGRAFIA.colore
-    val immagini = m.mediaDi(e.id)
+    val file = m.mediaDi(e.id)
+    val immagini = file.filter { !it.pdf }
+    val pdf = file.size - immagini.size
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
@@ -161,14 +163,16 @@ private fun EcografiaCard(m: Model, e: Ecografia, onClick: () -> Unit) {
                 val riga = listOfNotNull(
                     Gravidanza.settimana(m.dpp, e.data)?.let { "Settimana $it" },
                     if (immagini.isEmpty()) null else if (immagini.size == 1) "1 immagine" else "${immagini.size} immagini",
+                    if (pdf == 0) null else if (pdf == 1) "1 PDF" else "$pdf PDF",
                 ).joinToString(" · ")
                 if (riga.isNotEmpty()) Text(riga, style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
                 val mis = riassuntoMisure(e)
                 if (mis.isNotEmpty()) Text(mis, style = MaterialTheme.typography.bodySmall)
             }
-            if (immagini.isNotEmpty()) {
+            val prima = immagini.firstOrNull() ?: file.firstOrNull()
+            if (prima != null) {
                 Spacer(Modifier.width(8.dp))
-                Miniatura(immagini.first(), Modifier.size(56.dp), onClick = onClick)
+                Miniatura(prima, Modifier.size(56.dp), onClick = onClick)
             }
         }
     }
@@ -185,6 +189,7 @@ fun EcografiaScreen(m: Model, id: String, snack: SnackbarHostState) {
     val ctx = LocalContext.current
     val aggiungi = rememberAggiuntaMedia(m, e.id)
     val immagini = m.mediaDi(e.id)
+    val pdf = immagini.count { it.pdf }
     val app = e.appuntamento?.let { m.trova(it) }
     var chiediElimina by remember { mutableStateOf(false) }
 
@@ -290,7 +295,7 @@ fun EcografiaScreen(m: Model, id: String, snack: SnackbarHostState) {
             AppCard {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "Immagini", style = MaterialTheme.typography.labelLarge, color = cs.primary,
+                        "Immagini e referto", style = MaterialTheme.typography.labelLarge, color = cs.primary,
                         fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f),
                     )
                     TextButton(onClick = aggiungi) { Text("Aggiungi") }
@@ -298,11 +303,11 @@ fun EcografiaScreen(m: Model, id: String, snack: SnackbarHostState) {
                 if (m.importazioni > 0) InCopia()
                 if (immagini.isEmpty()) {
                     Text(
-                        "Le stampe dell'ecografia, una foto dello schermo o il video del battito.",
+                        "Le stampe dell'ecografia, una foto dello schermo, il video del battito o il referto in PDF.",
                         style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
                     )
                 } else {
-                    GrigliaFissa(immagini) { m.vai(Schermata.Visore(it.id, e.id)) }
+                    GrigliaFissa(immagini) { m.apriFile(it, ecografia = e.id) }
                 }
             }
         }
@@ -315,7 +320,8 @@ fun EcografiaScreen(m: Model, id: String, snack: SnackbarHostState) {
             text = {
                 Text(
                     "Misure e note vengono cancellate." +
-                        (if (immagini.isNotEmpty()) " Le immagini restano nella sezione Foto." else ""),
+                        (if (immagini.size > pdf) " Le immagini restano nella sezione Foto." else "") +
+                        (if (pdf > 0) " I PDF vengono eliminati (su Google Drive finiscono nel cestino)." else ""),
                 )
             },
             confirmButton = {

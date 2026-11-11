@@ -35,6 +35,7 @@ private const val F_MEDIA = "media.json"
 private const val F_PESI = "pesi.json"
 private const val F_CONSIGLI = "consigli.json"
 private const val F_CONVERSAZIONI = "conversazioni.json"
+private const val F_REFERTI = "referti.json"
 
 /**
  * Stato dell'app. Ogni sezione ha il suo file JSON (vedi [Archivio]), le impostazioni stanno nelle preferenze.
@@ -51,6 +52,8 @@ class Model private constructor(private val ctx: Context) {
     var ecografie by mutableStateOf(Ecografia.ordina(Archivio.carica(ctx, F_ECOGRAFIE, "ecografie") { Ecografia.daJson(it) }))
         private set
     var media by mutableStateOf(Media.ordina(Archivio.carica(ctx, F_MEDIA, "media") { Media.daJson(it) }))
+        private set
+    var referti by mutableStateOf(Referto.ordina(Archivio.carica(ctx, F_REFERTI, "referti") { Referto.daJson(it) }))
         private set
     var pesi by mutableStateOf(Peso.ordina(Archivio.carica(ctx, F_PESI, "pesi") { Peso.daJson(it) }))
         private set
@@ -129,6 +132,11 @@ class Model private constructor(private val ctx: Context) {
         private set
     var nomeCartellaEco by mutableStateOf(prefs.getString("driveEcoNome", null) ?: "")
         private set
+    /** Cartella di Drive per i referti (facoltativa: senza, i referti restano solo sul telefono). */
+    var cartellaRef by mutableStateOf(prefs.getString("driveRef", null))
+        private set
+    var nomeCartellaRef by mutableStateOf(prefs.getString("driveRefNome", null) ?: "")
+        private set
     var driveInSync by mutableStateOf(false)
         private set
     /** Quando è finita l'ultima sincronizzazione riuscita (millisecondi, 0 = mai). */
@@ -203,11 +211,8 @@ class Model private constructor(private val ctx: Context) {
         }
         appuntamenti = appuntamenti.filter { it.id != id }
         salvaAppuntamenti()
-        // l'ecografia collegata resta, ma non punta più all'appuntamento
-        if (ecografie.any { it.appuntamento == id }) {
-            ecografie = ecografie.map { if (it.appuntamento == id) it.copy(appuntamento = null) else it }
-            salvaEcografie()
-        }
+        // ecografia e referti collegati restano, ma non puntano più all'appuntamento
+        scollegaDaAppuntamenti(setOf(id))
         messaggio = "Appuntamento eliminato."
     }
 
@@ -328,6 +333,18 @@ class Model private constructor(private val ctx: Context) {
         }
     }
 
+    /** Ecografie e referti di appuntamenti tolti restano, ma senza collegamento. */
+    private fun scollegaDaAppuntamenti(ids: Set<String>) {
+        if (ecografie.any { it.appuntamento in ids }) {
+            ecografie = ecografie.map { if (it.appuntamento in ids) it.copy(appuntamento = null) else it }
+            salvaEcografie()
+        }
+        if (referti.any { it.appuntamento in ids }) {
+            referti = referti.map { if (it.appuntamento in ids) it.copy(appuntamento = null) else it }
+            salvaReferti()
+        }
+    }
+
     private fun calendarioDi(chiave: String): Long? = chiave.substringBefore(":").toLongOrNull()
     private fun eventoDi(chiave: String): Long? = chiave.substringAfter(":").substringBefore("@").toLongOrNull()
 
@@ -438,10 +455,7 @@ class Model private constructor(private val ctx: Context) {
             appuntamenti = Appuntamento.ordina(lista)
             salvaAppuntamenti()
         }
-        if (tolte.isNotEmpty() && ecografie.any { it.appuntamento in tolte }) {
-            ecografie = ecografie.map { if (it.appuntamento in tolte) it.copy(appuntamento = null) else it }
-            salvaEcografie()
-        }
+        if (tolte.isNotEmpty()) scollegaDaAppuntamenti(tolte)
         val parti = listOfNotNull(
             when (nuovi) { 0 -> null; 1 -> "1 appuntamento nuovo"; else -> "$nuovi appuntamenti nuovi" },
             when (aggiornati) { 0 -> null; 1 -> "1 aggiornato"; else -> "$aggiornati aggiornati" },
@@ -476,16 +490,36 @@ class Model private constructor(private val ctx: Context) {
         prefs.edit().putBoolean("driveCollegato", false).apply()
     }
 
-    /** Sceglie la cartella delle foto ([eco] falso) o delle ecografie ([eco] vero) e sincronizza. */
-    fun impostaCartellaDrive(eco: Boolean, id: String, nome: String) {
-        if (eco) {
-            cartellaEco = id
-            nomeCartellaEco = nome
-            prefs.edit().putString("driveEco", id).putString("driveEcoNome", nome).apply()
-        } else {
-            cartellaFoto = id
-            nomeCartellaFoto = nome
-            prefs.edit().putString("driveFoto", id).putString("driveFotoNome", nome).apply()
+    /** Sceglie la cartella di Drive per [quale] ("foto", "eco" = ecografie, "ref" = referti) e sincronizza. */
+    fun impostaCartellaDrive(quale: String, id: String, nome: String) {
+        when (quale) {
+            "eco" -> {
+                if (id == cartellaRef) {
+                    messaggio = "È già la cartella dei referti: per le ecografie scegline un'altra."
+                    return
+                }
+                cartellaEco = id
+                nomeCartellaEco = nome
+                prefs.edit().putString("driveEco", id).putString("driveEcoNome", nome).apply()
+            }
+            "ref" -> {
+                if (id == cartellaFoto || id == cartellaEco) {
+                    messaggio = "Per i referti scegli una cartella diversa da quelle delle foto e delle ecografie."
+                    return
+                }
+                cartellaRef = id
+                nomeCartellaRef = nome
+                prefs.edit().putString("driveRef", id).putString("driveRefNome", nome).apply()
+            }
+            else -> {
+                if (id == cartellaRef) {
+                    messaggio = "È già la cartella dei referti: per le foto scegline un'altra."
+                    return
+                }
+                cartellaFoto = id
+                nomeCartellaFoto = nome
+                prefs.edit().putString("driveFoto", id).putString("driveFotoNome", nome).apply()
+            }
         }
         sincronizzaDrive(silenzioso = false, subito = true)
     }
@@ -505,13 +539,17 @@ class Model private constructor(private val ctx: Context) {
         if (!subito && adesso - ultimaSyncAuto < 60_000) return
         ultimaSyncAuto = adesso
         val ecoId = cartellaEco
+        val refId = cartellaRef
         val istantanea = media
         val ecos = ecografie
+        val refs = referti
         val cestino = daCestinare
         driveInSync = true
         scope.launch {
             try {
-                val esito = withContext(Dispatchers.IO) { SincroniaDrive.esegui(ctx, istantanea, ecos, cestino, fotoId, ecoId) }
+                val esito = withContext(Dispatchers.IO) {
+                    SincroniaDrive.esegui(ctx, istantanea, ecos, refs, cestino, fotoId, ecoId, refId)
+                }
                 applicaSync(esito, silenzioso)
                 driveProblema = null
                 driveServeConsenso = false
@@ -552,9 +590,43 @@ class Model private constructor(private val ctx: Context) {
             null
         }
 
+        val refs = referti.toMutableList()
+        var refCambiati = false
+        // referti creati adesso per i file nuovi: uno per ogni PDF, uno per giorno per le foto
+        val nuoviRef = HashMap<String, String>()
+        fun appuntamentoPer(d: LocalDate): String? =
+            appuntamenti.firstOrNull { a -> a.tipo == Tipo.ESAMI && a.data == d && refs.none { it.appuntamento == a.id } }?.id
+        // il referto a cui appartiene un file della cartella dei referti; se non c'è lo creo
+        fun refertoPer(f: FileDrive, d: LocalDate): String {
+            val pid = f.propReferto
+            if (pid.isNotEmpty()) {
+                if (refs.any { it.id == pid }) return pid
+                // l'app è stata reinstallata: ricreo il referto con quello che l'app aveva salvato su Drive
+                val titolo = f.propTitolo.ifEmpty { NomeFile.titolo(f.nome) }.ifEmpty { "Referto" }
+                refs.add(
+                    Referto(
+                        id = pid, tipo = TipoReferto.da(f.propTipo) ?: TipoReferto.indovina(titolo),
+                        titolo = titolo, data = d, appuntamento = appuntamentoPer(d),
+                    )
+                )
+                refCambiati = true
+                return pid
+            }
+            val pdf = f.mime == MIME_PDF
+            val chiave = if (pdf) "f:" + f.id else "g:$d"
+            nuoviRef[chiave]?.let { return it }
+            val titolo = (if (pdf) NomeFile.titolo(f.nome) else "").ifEmpty { "Referto del " + dataMedia(d) }
+            val r = Referto(tipo = TipoReferto.indovina(titolo), titolo = titolo, data = d, appuntamento = appuntamentoPer(d))
+            refs.add(r)
+            refCambiati = true
+            nuoviRef[chiave] = r.id
+            return r.id
+        }
+
         val suDrive = HashMap<String, Pair<FileDrive, String>>()
         for (f in es.foto) suDrive[f.id] = Pair(f, "foto")
         for (f in es.eco) suDrive[f.id] = Pair(f, "eco")
+        for (f in es.ref) suDrive[f.id] = Pair(f, "ref")
         val appenaCaricati = es.caricati.values.map { it.first }.toHashSet()
 
         var tolti = 0
@@ -572,10 +644,12 @@ class Model private constructor(private val ctx: Context) {
             }
             val trovato = suDrive[d]
             if (trovato == null) {
-                if (d in appenaCaricati) {
+                val nota = m0.cartellaDrive
+                if (d in appenaCaricati || (nota != null && nota !in es.elencate)) {
+                    // appena caricato, o in una cartella che stavolta non si è letta: resta com'è
                     lista.add(m0)
                 } else {
-                    // non c'è più su Drive: la tolgo anche dall'app
+                    // non c'è più su Drive: lo tolgo anche dall'app
                     Galleria.elimina(ctx, m0)
                     tolti++
                 }
@@ -584,10 +658,14 @@ class Model private constructor(private val ctx: Context) {
             val cart = es.cartelle[m0.id] ?: trovato.second
             lista.add(
                 if (m0.id in es.spostatiSuDrive) {
-                    if (cart == "eco") {
-                        m0.copy(cartellaDrive = cart, ecografia = m0.ecografia ?: ecografiaPer(dataEco(trovato.first) ?: m0.data))
-                    } else {
-                        m0.copy(cartellaDrive = cart, ecografia = null)
+                    // spostato a mano su Drive in un'altra cartella: vince Drive
+                    when (cart) {
+                        "eco" -> m0.copy(
+                            cartellaDrive = cart, referto = null,
+                            ecografia = m0.ecografia ?: ecografiaPer(dataEco(trovato.first) ?: m0.data),
+                        )
+                        "ref" -> m0.copy(cartellaDrive = cart, ecografia = null, referto = m0.referto ?: refertoPer(trovato.first, m0.data))
+                        else -> m0.copy(cartellaDrive = cart, ecografia = null, referto = null)
                     }
                 } else {
                     m0.copy(cartellaDrive = cart)
@@ -598,30 +676,44 @@ class Model private constructor(private val ctx: Context) {
         // file nuovi su Drive
         val conosciuti = lista.mapNotNull { it.driveId }.toHashSet()
         var nuovi = 0
+        var nuoviDoc = 0
         for ((id, coppia) in suDrive) {
             if (id in conosciuti || id in daCestinare) continue
             val f = coppia.first
             val cart = coppia.second
             val data = SincroniaDrive.dataDi(f)
-            val de = dataEco(f)
-            val ecografia = when {
-                cart == "eco" -> ecografiaPer(de ?: data)
-                de != null -> ecografiaPer(de)
-                else -> null
+            val pdf = f.mime == MIME_PDF
+            var ecografia: String? = null
+            var referto: String? = null
+            when (cart) {
+                "eco" -> ecografia = ecografiaPer(dataEco(f) ?: data)
+                "ref" -> referto = refertoPer(f, data)
+                else -> dataEco(f)?.let { ecografia = ecografiaPer(it) }
             }
             lista.add(
                 Media(
                     file = "d-" + id + "." + SincroniaDrive.estensione(f),
-                    video = f.mime.startsWith("video"),
+                    video = !pdf && f.mime.startsWith("video"),
+                    pdf = pdf,
                     data = data,
-                    didascalia = f.descrizione,
+                    // dei PDF, se su Drive non c'è una descrizione, mostro il nome del file
+                    didascalia = if (pdf) f.descrizione.ifBlank { NomeFile.titolo(f.nome) } else f.descrizione,
                     ecografia = ecografia,
+                    referto = referto,
                     aggiunto = SincroniaDrive.creatoMs(f),
                     driveId = id,
                     cartellaDrive = cart,
                 )
             )
-            nuovi++
+            if (pdf) nuoviDoc++ else nuovi++
+        }
+
+        // i file di un referto hanno la data del referto
+        val dataRef = refs.associate { it.id to it.data }
+        for (i in lista.indices) {
+            val x = lista[i]
+            val dr = x.referto?.let { dataRef[it] } ?: continue
+            if (dr != x.data) lista[i] = x.copy(data = dr)
         }
 
         media = Media.ordina(lista)
@@ -629,6 +721,10 @@ class Model private constructor(private val ctx: Context) {
         if (ecoCambiate) {
             ecografie = Ecografia.ordina(ecos)
             salvaEcografie()
+        }
+        if (refCambiati) {
+            referti = Referto.ordina(refs)
+            salvaReferti()
         }
         if (es.cestinati.isNotEmpty()) {
             daCestinare = daCestinare - es.cestinati
@@ -639,6 +735,7 @@ class Model private constructor(private val ctx: Context) {
 
         val parti = listOfNotNull(
             when (nuovi) { 0 -> null; 1 -> "1 foto o video nuovo"; else -> "$nuovi foto e video nuovi" },
+            when (nuoviDoc) { 0 -> null; 1 -> "1 PDF nuovo"; else -> "$nuoviDoc PDF nuovi" },
             when (tolti) { 0 -> null; 1 -> "1 tolto"; else -> "$tolti tolti" },
         )
         messaggio = when {
@@ -659,15 +756,22 @@ class Model private constructor(private val ctx: Context) {
     fun salvaEcografia(e: Ecografia) {
         ecografie = Ecografia.ordina(ecografie.filter { it.id != e.id } + e)
         salvaEcografie()
+        // i PDF dell'ecografia hanno la sua data
+        if (media.any { it.ecografia == e.id && it.pdf && it.data != e.data }) {
+            media = Media.ordina(media.map { if (it.ecografia == e.id && it.pdf) it.copy(data = e.data) else it })
+            salvaMedia()
+        }
         // se è cambiata la data, va aggiornata sulle sue immagini in Drive
         if (media.any { it.ecografia == e.id && it.driveId != null }) sincronizzaDrive(silenzioso = true, subito = true)
     }
 
-    /** Elimina l'ecografia. Le sue immagini restano nella sezione Foto. */
+    /** Elimina l'ecografia. Le sue immagini restano nella sezione Foto; i PDF (il referto) se ne vanno con lei. */
     fun eliminaEcografia(id: String) {
         ecografie = ecografie.filter { it.id != id }
         salvaEcografie()
-        if (media.any { it.ecografia == id }) {
+        val suoi = mediaDi(id)
+        togliFile(suoi.filter { it.pdf })
+        if (suoi.any { !it.pdf }) {
             media = media.map { if (it.ecografia == id) it.copy(ecografia = null) else it }
             salvaMedia()
             // su Drive le sue immagini passano nella cartella delle foto
@@ -676,17 +780,65 @@ class Model private constructor(private val ctx: Context) {
         messaggio = "Ecografia eliminata."
     }
 
-    // ---------------- Foto e video ----------------
+    // ---------------- Referti ----------------
+
+    fun referto(id: String): Referto? = referti.firstOrNull { it.id == id }
+
+    /** I referti nati da quell'appuntamento. */
+    fun refertiDi(appuntamento: String): List<Referto> = referti.filter { it.appuntamento == appuntamento }
+
+    /** PDF e foto del referto. */
+    fun fileDi(referto: String): List<Media> = media.filter { it.referto == referto }
+
+    fun salvaReferto(r: Referto) {
+        referti = Referto.ordina(referti.filter { it.id != r.id } + r)
+        salvaReferti()
+        // i file del referto hanno la sua data
+        if (media.any { it.referto == r.id && it.data != r.data }) {
+            media = Media.ordina(media.map { if (it.referto == r.id) it.copy(data = r.data) else it })
+            salvaMedia()
+        }
+        // su Drive i file ricordano data, titolo e tipo del referto
+        if (media.any { it.referto == r.id && it.driveId != null }) sincronizzaDrive(silenzioso = true, subito = true)
+    }
+
+    /** Elimina il referto con i suoi file (su Drive finiscono nel cestino). */
+    fun eliminaReferto(id: String) {
+        val suoi = fileDi(id)
+        referti = referti.filter { it.id != id }
+        salvaReferti()
+        togliFile(suoi)
+        messaggio = "Referto eliminato."
+    }
+
+    // ---------------- Foto, video e PDF ----------------
+
+    /** Foto e video della sezione Foto: tutto tranne PDF e file dei referti. */
+    val galleria: List<Media> get() = media.filter { !it.pdf && it.referto == null }
 
     fun mediaDi(ecografia: String): List<Media> = media.filter { it.ecografia == ecografia }
 
-    /** Copia nell'app le foto e i video scelti dalla galleria (in sottofondo: i video possono essere grandi). */
-    fun importa(uris: List<Uri>, ecografia: String?) {
+    fun mediaPerId(id: String): Media? = media.firstOrNull { it.id == id }
+
+    /** I file di un referto prendono la sua data, i PDF di un'ecografia quella dell'ecografia. */
+    private fun conDataGiusta(x: Media): Media {
+        val r = x.referto?.let { referto(it) }
+        if (r != null) return x.copy(data = r.data)
+        val e = if (x.pdf) x.ecografia?.let { ecografia(it) } else null
+        if (e != null) return x.copy(data = e.data)
+        return x
+    }
+
+    /**
+     * Copia nell'app le foto e i video scelti dalla galleria, o i PDF scelti tra i file (in sottofondo: possono essere grandi).
+     * Con [ecografia] o [referto] li collega a quell'ecografia o a quel referto.
+     */
+    fun importa(uris: List<Uri>, ecografia: String?, referto: String? = null) {
         if (uris.isEmpty()) return
         importazioni += 1
         scope.launch {
-            val nuovi = withContext(Dispatchers.IO) { uris.mapNotNull { Galleria.copia(ctx, it, ecografia) } }
-            aggiungiMedia(nuovi)
+            val nuovi = withContext(Dispatchers.IO) { uris.mapNotNull { Galleria.copia(ctx, it, ecografia, referto) } }
+            aggiungiMedia(nuovi.map { conDataGiusta(it) })
             importazioni -= 1
             sincronizzaDrive(silenzioso = true, subito = true)
             val falliti = uris.size - nuovi.size
@@ -700,9 +852,9 @@ class Model private constructor(private val ctx: Context) {
     }
 
     /** Dopo la fotocamera: tiene il file se è stato scritto davvero, altrimenti lo cancella. */
-    fun dopoScatto(f: File, video: Boolean, ecografia: String?) {
+    fun dopoScatto(f: File, video: Boolean, ecografia: String?, referto: String? = null) {
         if (f.exists() && f.length() > 0) {
-            aggiungiMedia(listOf(Media(file = f.name, video = video, data = LocalDate.now(), ecografia = ecografia)))
+            aggiungiMedia(listOf(conDataGiusta(Media(file = f.name, video = video, data = LocalDate.now(), ecografia = ecografia, referto = referto))))
             messaggio = if (video) "Video aggiunto." else "Foto aggiunta."
             sincronizzaDrive(silenzioso = true, subito = true)
         } else {
@@ -723,18 +875,28 @@ class Model private constructor(private val ctx: Context) {
     }
 
     fun eliminaMedia(id: String) {
-        val x = media.firstOrNull { it.id == id } ?: return
-        Galleria.elimina(ctx, x)
-        media = media.filter { it.id != id }
+        val x = mediaPerId(id) ?: return
+        togliFile(listOf(x))
+        messaggio = when {
+            x.pdf -> "Documento eliminato."
+            x.video -> "Video eliminato."
+            else -> "Foto eliminata."
+        }
+    }
+
+    /** Toglie i file dall'app; su Drive vanno nel cestino (anche più tardi, se adesso non c'è rete). */
+    private fun togliFile(lista: List<Media>) {
+        if (lista.isEmpty()) return
+        val ids = lista.map { it.id }.toHashSet()
+        for (x in lista) Galleria.elimina(ctx, x)
+        media = media.filter { it.id !in ids }
         salvaMedia()
-        // su Drive va nel cestino (anche più tardi, se adesso non c'è rete)
-        val did = x.driveId
-        if (did != null && driveCollegato) {
-            daCestinare = daCestinare + did
+        val suDrive = lista.mapNotNull { it.driveId }
+        if (suDrive.isNotEmpty() && driveCollegato) {
+            daCestinare = daCestinare + suDrive
             prefs.edit().putStringSet("driveDaCestinare", HashSet(daCestinare)).apply()
             sincronizzaDrive(silenzioso = true, subito = true)
         }
-        messaggio = if (x.video) "Video eliminato." else "Foto eliminata."
     }
 
     // ---------------- Pesi ----------------
@@ -882,6 +1044,7 @@ class Model private constructor(private val ctx: Context) {
     private fun salvaAppuntamenti() = Archivio.salva(ctx, F_APPUNTAMENTI, "appuntamenti", appuntamenti) { it.toJson() }
     private fun salvaEcografie() = Archivio.salva(ctx, F_ECOGRAFIE, "ecografie", ecografie) { it.toJson() }
     private fun salvaMedia() = Archivio.salva(ctx, F_MEDIA, "media", media) { it.toJson() }
+    private fun salvaReferti() = Archivio.salva(ctx, F_REFERTI, "referti", referti) { it.toJson() }
     private fun salvaPesi() = Archivio.salva(ctx, F_PESI, "pesi", pesi) { it.toJson() }
     private fun salvaConsigli() = Archivio.salva(ctx, F_CONSIGLI, "consigli", consigli) { it.toJson() }
     private fun salvaConversazioni() = Archivio.salva(ctx, F_CONVERSAZIONI, "conversazioni", conversazioni) { it.toJson() }

@@ -30,11 +30,18 @@ data class FileDrive(
     /** Data di scatto letta da Drive nei dati EXIF ("2026:11:02 10:30:00"). */
     val dataFoto: String = "",
     val md5: String = "",
-    /** Data della foto salvata dall'app (proprietà privata "pancyData"). */
-    val propData: String = "",
-    /** Data dell'ecografia a cui appartiene, salvata dall'app ("pancyEcografia"). */
-    val propEco: String = "",
-)
+    /** Proprietà private salvate dall'app sul file (si chiamano tutte "pancy…"). */
+    val props: Map<String, String> = emptyMap(),
+) {
+    /** Data della foto ("pancyData"). */
+    val propData: String get() = props["pancyData"].orEmpty()
+    /** Data dell'ecografia a cui appartiene ("pancyEcografia"). */
+    val propEco: String get() = props["pancyEcografia"].orEmpty()
+    /** Id, tipo e titolo del referto a cui appartiene ("pancyReferto", "pancyTipo", "pancyTitolo"). */
+    val propReferto: String get() = props["pancyReferto"].orEmpty()
+    val propTipo: String get() = props["pancyTipo"].orEmpty()
+    val propTitolo: String get() = props["pancyTitolo"].orEmpty()
+}
 
 class ErroreDrive(messaggio: String, val serveConsenso: Boolean = false, val codice: Int = 0) : Exception(messaggio)
 
@@ -134,7 +141,9 @@ object Drive {
     }
 
     private fun daJson(o: JSONObject): FileDrive {
-        val props = o.optJSONObject("appProperties")
+        val jp = o.optJSONObject("appProperties")
+        val props = HashMap<String, String>()
+        if (jp != null) for (k in jp.keys()) props[k] = jp.optString(k)
         return FileDrive(
             id = o.getString("id"),
             nome = o.optString("name"),
@@ -143,8 +152,7 @@ object Drive {
             creato = o.optString("createdTime"),
             dataFoto = o.optJSONObject("imageMediaMetadata")?.optString("time").orEmpty(),
             md5 = o.optString("md5Checksum"),
-            propData = props?.optString("pancyData").orEmpty(),
-            propEco = props?.optString("pancyEcografia").orEmpty(),
+            props = props,
         )
     }
 
@@ -169,9 +177,11 @@ object Drive {
         cerca(ctx, "'$genitore' in parents and mimeType = '$TIPO_CARTELLA' and trashed = false")
             .sortedBy { it.nome.lowercase() }
 
-    /** Foto e video contenuti nella cartella. */
-    fun mediaIn(ctx: Context, cartella: String): List<FileDrive> =
-        cerca(ctx, "'$cartella' in parents and trashed = false and (mimeType contains 'image/' or mimeType contains 'video/')")
+    /** Foto e video contenuti nella cartella; con [pdf] anche i PDF. */
+    fun mediaIn(ctx: Context, cartella: String, pdf: Boolean = false): List<FileDrive> {
+        val tipi = "mimeType contains 'image/' or mimeType contains 'video/'" + (if (pdf) " or mimeType = '$MIME_PDF'" else "")
+        return cerca(ctx, "'$cartella' in parents and trashed = false and ($tipi)")
+    }
 
     /** Nome e tipo di un file o cartella (per esempio da un link incollato). */
     fun info(ctx: Context, id: String): FileDrive =
@@ -267,7 +277,7 @@ object Drive {
         }
     }
 
-    /** Aggiorna didascalia e proprietà dell'app (data, ecografia). */
+    /** Aggiorna didascalia e proprietà dell'app (data, ecografia, referto). */
     fun aggiornaInfo(ctx: Context, id: String, descrizione: String, props: Map<String, String?>) {
         chiama(
             ctx, "PATCH", "$API/files/$id?supportsAllDrives=true&fields=id",
@@ -288,13 +298,16 @@ object Drive {
 
 /** Risultato di una sincronizzazione, da applicare ai dati dell'app sul thread principale. */
 class EsitoSync(
-    /** Foto dell'app caricate (o ritrovate uguali) su Drive: id foto -> (id Drive, "foto"/"eco"). */
+    /** File dell'app caricati (o ritrovati uguali) su Drive: id file -> (id Drive, "foto"/"eco"/"ref"). */
     val caricati: Map<String, Pair<String, String>>,
     /** File messi nel cestino di Drive. */
     val cestinati: Set<String>,
     val foto: List<FileDrive>,
     val eco: List<FileDrive>,
-    /** Cartella in cui si trova ora ogni foto già collegata ("foto"/"eco"). */
+    val ref: List<FileDrive>,
+    /** Le cartelle lette in questa sincronizzazione ("foto", "eco", "ref"): solo lì un file mancante è stato eliminato. */
+    val elencate: Set<String>,
+    /** Cartella in cui si trova ora ogni file già collegato ("foto"/"eco"/"ref"). */
     val cartelle: Map<String, String>,
     /** Foto spostate a mano su Drive da una cartella all'altra. */
     val spostatiSuDrive: Set<String>,
@@ -303,24 +316,19 @@ class EsitoSync(
 )
 
 /**
- * Sincronizzazione nei due sensi tra le foto dell'app e le due cartelle di Drive.
+ * Sincronizzazione nei due sensi tra i file dell'app e le cartelle di Drive (foto, ecografie, referti).
  * Regole: ciò che si aggiunge o si elimina da una parte si aggiunge o si elimina anche dall'altra;
- * le foto delle ecografie stanno nella cartella delle ecografie (se è stata scelta).
+ * le foto delle ecografie stanno nella cartella delle ecografie (se è stata scelta), i file dei referti in quella dei referti.
+ * I PDF stanno solo nelle cartelle delle ecografie e dei referti.
  */
 object SincroniaDrive {
-    private val DATA_NEL_NOME = Regex("(20\\d{2})[-_.]?(\\d{2})[-_.]?(\\d{2})")
-
-    /** La data di una foto di Drive: quella salvata dall'app, poi quella di scatto, poi quella nel nome, poi il caricamento. */
+    /** La data di un file di Drive: quella salvata dall'app, poi quella di scatto, poi quella nel nome, poi il caricamento. */
     fun dataDi(f: FileDrive): LocalDate {
         prova { LocalDate.parse(f.propData) }?.let { return it }
         if (f.dataFoto.length >= 10) {
             prova { LocalDate.parse(f.dataFoto.substring(0, 10).replace(':', '-')) }?.let { return it }
         }
-        DATA_NEL_NOME.find(f.nome)?.let { m ->
-            prova { LocalDate.of(m.groupValues[1].toInt(), m.groupValues[2].toInt(), m.groupValues[3].toInt()) }
-                ?.takeIf { !it.isAfter(LocalDate.now()) }
-                ?.let { return it }
-        }
+        NomeFile.data(f.nome)?.let { return it }
         prova { Instant.parse(f.creato).atZone(ZoneId.systemDefault()).toLocalDate() }?.let { return it }
         return LocalDate.now()
     }
@@ -328,6 +336,7 @@ object SincroniaDrive {
     fun creatoMs(f: FileDrive): Long = prova { Instant.parse(f.creato).toEpochMilli() } ?: System.currentTimeMillis()
 
     fun estensione(f: FileDrive): String {
+        if (f.mime == MIME_PDF) return "pdf"
         val dalNome = f.nome.substringAfterLast('.', "").lowercase()
         if (dalNome.length in 2..4) return dalNome
         return MimeTypeMap.getSingleton().getExtensionFromMimeType(f.mime) ?: if (f.mime.startsWith("video")) "mp4" else "jpg"
@@ -348,19 +357,38 @@ object SincroniaDrive {
         return d.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun mimeDi(f: File, video: Boolean): String =
-        MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase())
-            ?: if (video) "video/mp4" else "image/jpeg"
+    private fun mimeDi(f: File, m: Media): String =
+        if (m.pdf) MIME_PDF
+        else MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: if (m.video) "video/mp4" else "image/jpeg"
 
     /** Nome del file su Drive: comincia con la data, così si ritrova anche senza l'app. */
-    private fun nomeSuDrive(m: Media, ecografia: Ecografia?, f: File): String {
+    private fun nomeSuDrive(m: Media, ecografia: Ecografia?, referto: Referto?, f: File): String {
         val descr = when {
+            referto != null -> referto.titolo
             ecografia != null -> ecografia.titolo
             m.didascalia.isNotBlank() -> m.didascalia
+            m.pdf -> "Documento"
             m.video -> "Video"
             else -> "Foto"
         }.take(50).replace(Regex("[\\\\/:*?\"<>|\\n]"), " ").trim()
-        return "${m.data} $descr ${m.id.take(4)}.${f.extension.ifEmpty { if (m.video) "mp4" else "jpg" }}"
+        val est = f.extension.ifEmpty { if (m.pdf) "pdf" else if (m.video) "mp4" else "jpg" }
+        return "${m.data} $descr ${m.id.take(4)}.$est"
+    }
+
+    /** Il testo tagliato in modo che occupi al massimo [maxByte] byte (le proprietà di Drive hanno un limite). */
+    private fun taglia(s: String, maxByte: Int): String {
+        val sb = StringBuilder()
+        var n = 0
+        var i = 0
+        while (i < s.length) {
+            val cp = s.codePointAt(i)
+            val b = String(Character.toChars(cp)).toByteArray(Charsets.UTF_8).size
+            if (n + b > maxByte) break
+            sb.appendCodePoint(cp)
+            n += b
+            i += Character.charCount(cp)
+        }
+        return sb.toString().trim()
     }
 
     /** Il lavoro lungo: cestino, elenchi, caricamenti, spostamenti. Bloccante. */
@@ -368,18 +396,38 @@ object SincroniaDrive {
         ctx: Context,
         media: List<Media>,
         ecografie: List<Ecografia>,
+        referti: List<Referto>,
         daCestinare: Set<String>,
         fotoId: String,
         ecoId: String?,
+        refId: String?,
     ): EsitoSync {
         val dueCartelle = ecoId != null && ecoId != fotoId
-        fun idCartella(c: String): String = if (c == "eco" && dueCartelle && ecoId != null) ecoId else fotoId
-        fun cartellaVoluta(m: Media): String = if (m.ecografia != null && dueCartelle) "eco" else "foto"
+        val conRef = refId != null && refId != fotoId && refId != ecoId
+        fun idCartella(c: String): String = when {
+            c == "eco" && dueCartelle && ecoId != null -> ecoId
+            c == "ref" && conRef && refId != null -> refId
+            else -> fotoId
+        }
+        /** Dove deve stare il file su Drive; null = resta solo sul telefono (la sua cartella non è stata scelta). */
+        fun cartellaVoluta(m: Media): String? = when {
+            m.referto != null -> if (conRef) "ref" else null
+            m.pdf -> if (m.ecografia != null && dueCartelle) "eco" else null
+            m.ecografia != null && dueCartelle -> "eco"
+            else -> "foto"
+        }
         val ecoPerId = ecografie.associateBy { it.id }
-        fun props(m: Media): Map<String, String?> = mapOf(
-            "pancyData" to m.data.toString(),
-            "pancyEcografia" to m.ecografia?.let { ecoPerId[it] }?.data?.toString(),
-        )
+        val refPerId = referti.associateBy { it.id }
+        fun props(m: Media): Map<String, String?> {
+            val r = m.referto?.let { refPerId[it] }
+            return mapOf(
+                "pancyData" to m.data.toString(),
+                "pancyEcografia" to m.ecografia?.let { ecoPerId[it] }?.data?.toString(),
+                "pancyReferto" to m.referto,
+                "pancyTipo" to r?.tipo?.chiave,
+                "pancyTitolo" to r?.titolo?.let { taglia(it, 110) }?.takeIf { it.isNotEmpty() },
+            )
+        }
 
         var errori = 0
         var primoErrore: String? = null
@@ -402,26 +450,33 @@ object SincroniaDrive {
             }
         }
 
-        // 2. cosa c'è su Drive
+        // 2. cosa c'è su Drive (i PDF solo nelle cartelle delle ecografie e dei referti)
         val foto = Drive.mediaIn(ctx, fotoId).filter { it.id !in daCestinare }
-        val eco = if (dueCartelle && ecoId != null) Drive.mediaIn(ctx, ecoId).filter { it.id !in daCestinare } else emptyList()
+        val eco = if (dueCartelle && ecoId != null) Drive.mediaIn(ctx, ecoId, pdf = true).filter { it.id !in daCestinare } else emptyList()
+        val ref = if (conRef && refId != null) Drive.mediaIn(ctx, refId, pdf = true).filter { it.id !in daCestinare } else emptyList()
+        val elencate = HashSet<String>()
+        elencate.add("foto")
+        if (dueCartelle) elencate.add("eco")
+        if (conRef) elencate.add("ref")
         val dove = HashMap<String, String>()
         for (f in foto) dove[f.id] = "foto"
         for (f in eco) dove[f.id] = "eco"
-        val perId = (foto + eco).associateBy { it.id }
+        for (f in ref) dove[f.id] = "ref"
+        val tutti = foto + eco + ref
+        val perId = tutti.associateBy { it.id }
         val collegati = media.mapNotNull { it.driveId }.toHashSet()
         val perMd5 = HashMap<String, FileDrive>()
-        for (f in foto + eco) if (f.md5.isNotEmpty() && f.id !in collegati && f.md5 !in perMd5) perMd5[f.md5] = f
+        for (f in tutti) if (f.md5.isNotEmpty() && f.id !in collegati && f.md5 !in perMd5) perMd5[f.md5] = f
 
-        // 3. foto aggiunte nell'app: se su Drive c'è già lo stesso file lo collego, altrimenti lo carico
+        // 3. file aggiunti nell'app: se su Drive c'è già lo stesso file lo collego, altrimenti lo carico
         val caricati = HashMap<String, Pair<String, String>>()
         val usati = HashSet<String>()
         for (m in media) {
             if (m.driveId != null) continue
+            val voluta = cartellaVoluta(m) ?: continue
             val f = Galleria.file(ctx, m)
             if (!f.exists() || f.length() == 0L) continue
             try {
-                val voluta = cartellaVoluta(m)
                 val uguale = perMd5[md5(f)]?.takeIf { it.id !in usati }
                 if (uguale != null) {
                     usati.add(uguale.id)
@@ -429,7 +484,9 @@ object SincroniaDrive {
                     Drive.aggiornaInfo(ctx, uguale.id, m.didascalia, props(m))
                 } else {
                     val ecografia = m.ecografia?.let { ecoPerId[it] }
-                    val id = Drive.carica(ctx, f, nomeSuDrive(m, ecografia, f), mimeDi(f, m.video), idCartella(voluta), m.didascalia, props(m))
+                    val referto = m.referto?.let { refPerId[it] }
+                    val nome = nomeSuDrive(m, ecografia, referto, f)
+                    val id = Drive.carica(ctx, f, nome, mimeDi(f, m), idCartella(voluta), m.didascalia, props(m))
                     caricati[m.id] = Pair(id, voluta)
                 }
             } catch (e: ErroreDrive) {
@@ -439,7 +496,7 @@ object SincroniaDrive {
             }
         }
 
-        // 4. foto già collegate: spostamenti e didascalie
+        // 4. file già collegati: spostamenti, didascalie e proprietà
         val cartelle = HashMap<String, String>()
         val spostatiSuDrive = HashSet<String>()
         for (m in media) {
@@ -456,14 +513,14 @@ object SincroniaDrive {
                 }
                 val voluta = cartellaVoluta(m)
                 var finale = attuale
-                if (voluta != attuale) {
+                if (voluta != null && voluta != attuale) {
                     // cambiata nell'app (per esempio ecografia eliminata): la sposto su Drive
                     Drive.sposta(ctx, d, idCartella(attuale), idCartella(voluta))
                     finale = voluta
                 }
                 cartelle[m.id] = finale
                 val p = props(m)
-                if (f.descrizione != m.didascalia || f.propData != p["pancyData"].orEmpty() || f.propEco != p["pancyEcografia"].orEmpty()) {
+                if (f.descrizione != m.didascalia || p.any { (k, v) -> f.props[k].orEmpty() != v.orEmpty() }) {
                     Drive.aggiornaInfo(ctx, d, m.didascalia, p)
                 }
             } catch (e: ErroreDrive) {
@@ -472,6 +529,6 @@ object SincroniaDrive {
                 errore(e)
             }
         }
-        return EsitoSync(caricati, cestinati, foto, eco, cartelle, spostatiSuDrive, errori, primoErrore)
+        return EsitoSync(caricati, cestinati, foto, eco, ref, elencate, cartelle, spostatiSuDrive, errori, primoErrore)
     }
 }

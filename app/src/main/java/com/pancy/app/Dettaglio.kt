@@ -6,6 +6,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,10 +15,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -45,10 +48,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 /** Apre il luogo nell'app delle mappe (Google Maps o quella che c'è sul telefono). */
@@ -143,6 +149,48 @@ fun DettaglioScreen(m: Model, id: String, snack: SnackbarHostState) {
                         if (eco != null) "Vedi i risultati ›" else "Aggiungi i risultati ›",
                         style = MaterialTheme.typography.bodyMedium, color = cs.primary, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+            }
+
+            val refs = m.refertiDi(a.id)
+            // gli esami hanno sempre il riquadro del referto; visite e altro solo dopo, o se ne hanno già uno
+            val conReferto = a.tipo == Tipo.ESAMI ||
+                ((a.tipo == Tipo.VISITA || a.tipo == Tipo.ALTRO) && (a.passato() || refs.isNotEmpty()))
+            if (conReferto) {
+                AppCard {
+                    Text(
+                        if (a.tipo == Tipo.ESAMI) "Referto degli esami" else "Referti e documenti",
+                        style = MaterialTheme.typography.labelLarge, color = cs.primary, fontWeight = FontWeight.Bold,
+                    )
+                    if (refs.isEmpty()) {
+                        Text(
+                            if (a.passato()) "Aggiungi l'esito e il PDF o la foto del referto: li trovi poi nella sezione Referti."
+                            else "Dopo l'appuntamento potrai aggiungere qui il referto.",
+                            style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                    for (r in refs) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(8.dp))
+                                .clickable { m.vai(Schermata.RefDettaglio(r.id)) }.padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(r.titolo, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    r.esito.ifBlank { r.tipo.nome }, style = MaterialTheme.typography.bodySmall,
+                                    color = cs.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = cs.onSurfaceVariant)
+                        }
+                    }
+                    Text(
+                        if (refs.isEmpty()) "Aggiungi il referto ›" else "Aggiungi un altro referto ›",
+                        style = MaterialTheme.typography.bodyMedium, color = cs.primary, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(6.dp))
+                            .clickable { m.vai(Schermata.RefModifica(null, a.id)) }.padding(vertical = 2.dp),
                     )
                 }
             }
