@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZoneOffset
@@ -19,6 +20,9 @@ data class CalInfo(val id: Long, val nome: String, val account: String, val scri
  */
 object CalendarSync {
     val PERMESSI = arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+
+    /** Scritto in fondo agli eventi creati dall'app: così all'importazione si riconoscono e si saltano. */
+    const val MARCATORE = "(dall'app Pancy)"
 
     /** Promemoria per gli appuntamenti senza orario: la sera prima alle 20 (4 ore prima della mezzanotte). */
     private const val PROMEMORIA_SENZA_ORA_MIN = 4 * 60
@@ -73,7 +77,7 @@ object CalendarSync {
         if (sett != null) righe.add("Settimana $sett")
         if (a.medico.isNotBlank()) righe.add("Con: " + a.medico.trim())
         if (a.note.isNotBlank()) righe.add(a.note.trim())
-        righe.add("(dall'app Pancy)")
+        righe.add(MARCATORE)
         return righe.joinToString("\n")
     }
 
@@ -130,6 +134,68 @@ object CalendarSync {
             cr.insert(CalendarContract.Reminders.CONTENT_URI, r)
         }
         return id
+    }
+
+    /**
+     * Gli eventi dei [calendari] scelti tra [da] e [a] (millisecondi), uno per ogni ripetizione.
+     * Salta gli eventi annullati e quelli creati dall'app. Lista vuota se manca il permesso.
+     */
+    fun leggiEventi(ctx: Context, calendari: Set<Long>, da: Long, a: Long): List<EventoEsterno> {
+        if (!haPermesso(ctx) || calendari.isEmpty()) return emptyList()
+        val costruttore = CalendarContract.Instances.CONTENT_URI.buildUpon()
+        ContentUris.appendId(costruttore, da)
+        ContentUris.appendId(costruttore, a)
+        val proj = arrayOf(
+            CalendarContract.Instances.EVENT_ID,
+            CalendarContract.Instances.CALENDAR_ID,
+            CalendarContract.Instances.BEGIN,
+            CalendarContract.Instances.TITLE,
+            CalendarContract.Instances.EVENT_LOCATION,
+            CalendarContract.Instances.DESCRIPTION,
+            CalendarContract.Instances.ALL_DAY,
+            CalendarContract.Instances.RRULE,
+            CalendarContract.Instances.STATUS,
+        )
+        val sel = CalendarContract.Instances.CALENDAR_ID + " IN (" + calendari.joinToString(",") + ")"
+        val out = ArrayList<EventoEsterno>()
+        ctx.contentResolver.query(costruttore.build(), proj, sel, null, CalendarContract.Instances.BEGIN + " ASC")?.use { c ->
+            while (c.moveToNext()) {
+                if (!c.isNull(8) && c.getInt(8) == CalendarContract.Events.STATUS_CANCELED) continue
+                val descrizione = c.getString(5) ?: ""
+                if (descrizione.contains(MARCATORE)) continue
+                val eventId = c.getLong(0)
+                val calId = c.getLong(1)
+                val inizio = Instant.ofEpochMilli(c.getLong(2))
+                val tuttoIlGiorno = c.getInt(6) == 1
+                // gli eventi di tutto il giorno sono salvati a mezzanotte UTC
+                val quando = if (tuttoIlGiorno) inizio.atZone(ZoneOffset.UTC) else inizio.atZone(ZoneId.systemDefault())
+                val data = quando.toLocalDate()
+                val ora = if (tuttoIlGiorno) null else quando.toLocalTime().withSecond(0).withNano(0)
+                val ricorrente = !c.getString(7).isNullOrEmpty()
+                out.add(
+                    EventoEsterno(
+                        chiave = if (ricorrente) "$calId:$eventId@$data" else "$calId:$eventId",
+                        calId = calId,
+                        eventId = eventId,
+                        titolo = (c.getString(3) ?: "").trim(),
+                        luogo = (c.getString(4) ?: "").trim(),
+                        descrizione = descrizione.trim(),
+                        data = data,
+                        ora = ora,
+                    )
+                )
+            }
+        }
+        return out
+    }
+
+    /** Vero se l'evento c'è ancora nel calendario (non cancellato). */
+    fun eventoEsiste(ctx: Context, eventoId: Long): Boolean {
+        val sel = CalendarContract.Events._ID + " = ? AND " + CalendarContract.Events.DELETED + " = 0"
+        ctx.contentResolver.query(
+            CalendarContract.Events.CONTENT_URI, arrayOf(CalendarContract.Events._ID), sel, arrayOf(eventoId.toString()), null,
+        )?.use { c -> return c.moveToFirst() }
+        return false
     }
 
     fun elimina(ctx: Context, eventoId: Long) {

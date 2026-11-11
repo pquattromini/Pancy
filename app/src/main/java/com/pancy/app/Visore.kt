@@ -51,12 +51,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** Foto e video a schermo intero: si scorre di lato, doppio tocco o due dita per lo zoom. */
 @Composable
 fun VisoreScreen(m: Model, id: String, ecografia: String?) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     val lista = if (ecografia != null) m.mediaDi(ecografia) else m.media
     if (lista.isEmpty()) {
         LaunchedEffect(Unit) { m.indietro() }
@@ -98,10 +100,18 @@ fun VisoreScreen(m: Model, id: String, ecografia: String?) {
                     style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f),
                 )
                 IconButton(onClick = {
-                    try {
-                        Galleria.condividi(ctx, corrente)
-                    } catch (e: ActivityNotFoundException) {
-                        m.messaggio = "Non trovo app con cui condividere."
+                    val daCondividere = corrente
+                    scope.launch {
+                        val f = withContext(Dispatchers.IO) { Galleria.fileLocale(ctx, daCondividere) }
+                        if (f == null) {
+                            m.messaggio = "Non riesco a scaricare il file da Google Drive."
+                        } else {
+                            try {
+                                Galleria.condividi(ctx, daCondividere)
+                            } catch (e: ActivityNotFoundException) {
+                                m.messaggio = "Non trovo app con cui condividere."
+                            }
+                        }
                     }
                 }) {
                     Icon(Icons.Filled.Share, contentDescription = "Condividi", tint = Color.White)
@@ -184,14 +194,17 @@ fun Context.attivita(): Activity? {
 @Composable
 private fun PaginaFoto(med: Media, onZoom: (Boolean) -> Unit, onTap: () -> Unit) {
     val ctx = LocalContext.current
+    var fallita by remember { mutableStateOf(false) }
     val bmp by produceState<Bitmap?>(null, med.file) {
         value = withContext(Dispatchers.IO) {
             try {
-                Galleria.foto(Galleria.file(ctx, med), 2048)
+                val f = Galleria.fileLocale(ctx, med)
+                if (f == null) null else Galleria.foto(f, 2048)
             } catch (e: OutOfMemoryError) {
                 null
             }
         }
+        if (value == null) fallita = true
     }
     var scala by remember { mutableFloatStateOf(1f) }
     var spost by remember { mutableStateOf(Offset.Zero) }
@@ -234,7 +247,12 @@ private fun PaginaFoto(med: Media, onZoom: (Boolean) -> Unit, onTap: () -> Unit)
         contentAlignment = Alignment.Center,
     ) {
         val b = bmp
-        if (b == null) {
+        if (b == null && fallita) {
+            Text(
+                "Non riesco ad aprire la foto. Se è su Google Drive, controlla la connessione.",
+                color = Color.White, modifier = Modifier.padding(32.dp),
+            )
+        } else if (b == null) {
             CircularProgressIndicator(color = Color.White)
         } else {
             val img = remember(b) { b.asImageBitmap() }
@@ -255,9 +273,16 @@ private fun PaginaFoto(med: Media, onZoom: (Boolean) -> Unit, onTap: () -> Unit)
 @Composable
 private fun PaginaVideo(med: Media, onTap: () -> Unit) {
     val ctx = LocalContext.current
-    var avvia by remember { mutableStateOf(false) }
+    // 0 = anteprima, 1 = scarico da Drive, 2 = riproduco, 3 = non riesco a scaricarlo
+    var stato by remember { mutableStateOf(0) }
     val f = remember(med.file) { Galleria.file(ctx, med) }
-    if (avvia) {
+    LaunchedEffect(stato) {
+        if (stato == 1) {
+            val ok = withContext(Dispatchers.IO) { Galleria.fileLocale(ctx, med) != null }
+            stato = if (ok) 2 else 3
+        }
+    }
+    if (stato == 2) {
         AndroidView(
             factory = { c ->
                 FrameLayout(c).apply {
@@ -279,7 +304,7 @@ private fun PaginaVideo(med: Media, onTap: () -> Unit) {
         )
     } else {
         val bmp by produceState<Bitmap?>(null, med.file) {
-            value = withContext(Dispatchers.IO) { Galleria.fotogramma(f) }
+            value = withContext(Dispatchers.IO) { Galleria.miniaturaDi(ctx, med, 1080) }
         }
         Box(
             Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) },
@@ -290,11 +315,25 @@ private fun PaginaVideo(med: Media, onTap: () -> Unit) {
                 val img = remember(b) { b.asImageBitmap() }
                 Image(img, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
             }
-            IconButton(
-                onClick = { avvia = true },
-                modifier = Modifier.size(76.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape),
-            ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = "Riproduci", tint = Color.White, modifier = Modifier.size(48.dp))
+            when (stato) {
+                1 -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color.White)
+                    Text("Scarico il video da Google Drive…", color = Color.White, modifier = Modifier.padding(top = 12.dp))
+                }
+                else -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    IconButton(
+                        onClick = { stato = if (f.exists() && f.length() > 0) 2 else 1 },
+                        modifier = Modifier.size(76.dp).background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                    ) {
+                        Icon(Icons.Filled.PlayArrow, contentDescription = "Riproduci", tint = Color.White, modifier = Modifier.size(48.dp))
+                    }
+                    if (stato == 3) {
+                        Text(
+                            "Non riesco a scaricare il video: controlla la connessione.",
+                            color = Color.White, modifier = Modifier.padding(top = 12.dp),
+                        )
+                    }
+                }
             }
         }
     }

@@ -2,7 +2,26 @@ package com.pancy.app
 
 import org.json.JSONObject
 import java.time.LocalDate
+import java.time.LocalTime
 import java.util.UUID
+
+/**
+ * Un evento letto dal calendario del telefono, da importare come appuntamento.
+ * [chiave] lo identifica: "calendario:evento", con "@data" in più per gli eventi che si ripetono.
+ */
+data class EventoEsterno(
+    val chiave: String,
+    val calId: Long,
+    val eventId: Long,
+    val titolo: String,
+    val luogo: String,
+    val descrizione: String,
+    val data: LocalDate,
+    val ora: LocalTime?,
+) {
+    /** Cambia se nel calendario cambiano titolo, data, ora o luogo. */
+    val firma: String get() = "$titolo|$data|${ora ?: ""}|$luogo".hashCode().toString()
+}
 
 /** Le misure che si trovano di solito sul referto di un'ecografia. */
 enum class Misura(val chiave: String, val sigla: String, val nome: String, val unita: String, val decimali: Int) {
@@ -72,8 +91,11 @@ data class Ecografia(
 }
 
 /**
- * Una foto o un video. Il file sta nella cartella "media" dell'app ([file] è il nome).
+ * Una foto o un video. Il file sta nella cartella "media" dell'app ([file] è il nome);
+ * per quelli arrivati da Google Drive il file si scarica solo quando serve.
  * [ecografia] è l'ecografia a cui appartiene, se c'è.
+ * [driveId] è il file corrispondente su Google Drive; [cartellaDrive] dice in quale cartella era all'ultima
+ * sincronizzazione ("foto" o "eco"), per capire se è stato spostato a mano su Drive.
  */
 data class Media(
     val id: String = UUID.randomUUID().toString(),
@@ -83,6 +105,8 @@ data class Media(
     val didascalia: String = "",
     val ecografia: String? = null,
     val aggiunto: Long = System.currentTimeMillis(),
+    val driveId: String? = null,
+    val cartellaDrive: String? = null,
 ) {
     fun toJson(): JSONObject {
         val o = JSONObject()
@@ -93,6 +117,8 @@ data class Media(
             .put("didascalia", didascalia)
             .put("aggiunto", aggiunto)
         if (ecografia != null) o.put("ecografia", ecografia)
+        if (driveId != null) o.put("driveId", driveId)
+        if (cartellaDrive != null) o.put("cartellaDrive", cartellaDrive)
         return o
     }
 
@@ -105,6 +131,8 @@ data class Media(
             didascalia = o.optString("didascalia"),
             ecografia = o.optString("ecografia").takeIf { it.isNotEmpty() },
             aggiunto = o.optLong("aggiunto"),
+            driveId = o.optString("driveId").takeIf { it.isNotEmpty() },
+            cartellaDrive = o.optString("cartellaDrive").takeIf { it.isNotEmpty() },
         )
 
         /** Dalla più recente. */

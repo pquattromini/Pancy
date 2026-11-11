@@ -80,6 +80,7 @@ fun EcografieScreen(m: Model, snack: SnackbarHostState) {
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            if (m.avvisoDrive()) item(key = "avviso-drive") { AvvisoDrive(m) }
             if (prossima != null) {
                 item(key = "prossima") {
                     AppCard(onClick = { m.vai(Schermata.Dettaglio(prossima.id)) }) {

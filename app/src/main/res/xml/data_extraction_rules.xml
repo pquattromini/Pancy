@@ -5,6 +5,7 @@
     <cloud-backup>
         <exclude domain="file" path="media/" />
         <exclude domain="file" path="chat/" />
+        <exclude domain="file" path="miniature/" />
         <exclude domain="sharedpref" path="segreti.xml" />
     </cloud-backup>
     <device-transfer>

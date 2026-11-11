@@ -183,7 +183,12 @@ fun DettaglioScreen(m: Model, id: String, snack: SnackbarHostState) {
                 }
             }
 
-            if (m.calendario != null) {
+            if (a.esterno != null) {
+                Text(
+                    "Importato dal calendario del telefono: se lì cambiano data, ora o luogo, si aggiornano anche qui.",
+                    style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                )
+            } else if (m.calendario != null) {
                 Text(
                     if (a.evento != null) "Copiato nel calendario del telefono." else "Non è nel calendario del telefono.",
                     style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
@@ -198,8 +203,11 @@ fun DettaglioScreen(m: Model, id: String, snack: SnackbarHostState) {
             title = { Text("Eliminare l'appuntamento?") },
             text = {
                 Text(
-                    "«${a.titolo}» verrà tolto dall'app" +
-                        (if (a.evento != null) " e dal calendario del telefono." else "."),
+                    "«${a.titolo}» verrà tolto dall'app" + when {
+                        a.esterno != null -> ". Nel calendario resta, ma non verrà più importato."
+                        a.evento != null -> " e dal calendario del telefono."
+                        else -> "."
+                    },
                 )
             },
             confirmButton = {

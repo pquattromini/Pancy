@@ -281,7 +281,7 @@ object Assistente {
         modello: String,
         istruzioni: String,
         storia: List<Messaggio>,
-        immagini: Map<String, Pair<File, Boolean>>,
+        immagini: Map<String, Media>,
     ): String {
         val input = JSONArray()
         // le foto allegate si rimandano solo per gli ultimi 3 messaggi che ne hanno, per non pagarle ogni volta
@@ -349,7 +349,8 @@ object Assistente {
                 for (k in 0 until minOf(codici.length(), MAX_IMMAGINI_PER_VOLTA)) {
                     val cod = codici.optString(k).trim()
                     val im = immagini[cod]
-                    val url = if (im != null) immagineDataUrl(im.first, im.second) else null
+                    val f = if (im != null) Galleria.fileLocale(ctx, im) else null
+                    val url = if (im != null && f != null) immagineDataUrl(f, im.video) else null
                     if (url != null) {
                         trovati.add(cod)
                         viste.put(JSONObject().put("type", "input_text").put("text", "Immagine $cod:"))
@@ -394,8 +395,7 @@ Limiti importanti:
     /** Codice breve e stabile di una foto, per lo strumento guarda_immagini. */
     fun codice(med: Media): String = "F-" + med.id.replace("-", "").take(6)
 
-    fun immagini(m: Model, ctx: Context): Map<String, Pair<File, Boolean>> =
-        m.media.associate { codice(it) to Pair(Galleria.file(ctx, it), it.video) }
+    fun immagini(m: Model): Map<String, Media> = m.media.associateBy { codice(it) }
 
     fun istruzioni(m: Model): String = REGOLE + "\n\n# DATI DELL'APP\n\n" + dati(m)
 

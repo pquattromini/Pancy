@@ -48,7 +48,14 @@ fun FotoScreen(m: Model, snack: SnackbarHostState) {
         containerColor = cs.background,
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
+            AvvisoDrive(m, Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
             if (m.importazioni > 0) InCopia()
+            if (m.driveInSync) {
+                Text(
+                    "Sincronizzo con Google Drive…", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             if (m.media.isEmpty()) {
                 VuotoSezione(
                     painterResource(R.drawable.ic_foto),

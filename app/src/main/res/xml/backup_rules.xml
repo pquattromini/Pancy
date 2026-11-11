@@ -3,5 +3,6 @@
 <full-backup-content>
     <exclude domain="file" path="media/" />
     <exclude domain="file" path="chat/" />
+    <exclude domain="file" path="miniature/" />
     <exclude domain="sharedpref" path="segreti.xml" />
 </full-backup-content>

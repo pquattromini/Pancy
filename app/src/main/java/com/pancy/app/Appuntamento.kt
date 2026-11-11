@@ -42,6 +42,8 @@ enum class Tipo(val chiave: String, val nome: String, val colore: Color, val sug
  * Un appuntamento. [ora] è null se non c'è un orario (per esempio "esami del sangue, al mattino").
  * [evento] è l'id dell'evento nel calendario del telefono, se l'app ce l'ha copiato.
  * [esame] è la voce del calendario degli esami (sezione Consigli) da cui è nato, se c'è.
+ * [esterno] è l'evento del calendario da cui è stato importato (vedi [EventoEsterno.chiave]);
+ * [firma] dice com'era l'evento all'ultima importazione, per accorgersi se è cambiato.
  */
 data class Appuntamento(
     val id: String = UUID.randomUUID().toString(),
@@ -55,6 +57,8 @@ data class Appuntamento(
     val esito: String = "",
     val evento: Long? = null,
     val esame: String? = null,
+    val esterno: String? = null,
+    val firma: String? = null,
 ) {
     /** Passato: dal giorno dopo se non ha orario, altrimenti quando è finito. */
     fun passato(adesso: LocalDateTime = LocalDateTime.now()): Boolean {
@@ -75,6 +79,8 @@ data class Appuntamento(
         if (ora != null) o.put("ora", ora.toString())
         if (evento != null) o.put("evento", evento)
         if (esame != null) o.put("esame", esame)
+        if (esterno != null) o.put("esterno", esterno)
+        if (firma != null) o.put("firma", firma)
         return o
     }
 
@@ -91,6 +97,8 @@ data class Appuntamento(
             esito = o.optString("esito"),
             evento = if (o.has("evento")) o.getLong("evento") else null,
             esame = o.optString("esame").takeIf { it.isNotEmpty() },
+            esterno = o.optString("esterno").takeIf { it.isNotEmpty() },
+            firma = o.optString("firma").takeIf { it.isNotEmpty() },
         )
 
         /** In ordine di data e ora (quelli senza orario vengono prima, nella loro giornata). */

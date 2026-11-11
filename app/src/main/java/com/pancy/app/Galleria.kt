@@ -54,6 +54,42 @@ object Galleria {
 
     fun file(ctx: Context, m: Media): File = File(cartella(ctx), m.file)
 
+    fun cartellaMiniature(ctx: Context): File = File(ctx.filesDir, "miniature").also { it.mkdirs() }
+
+    /** Il file sul telefono; se la foto sta solo su Google Drive la scarica prima. Bloccante. Null se non ci riesce. */
+    fun fileLocale(ctx: Context, m: Media): File? {
+        val f = file(ctx, m)
+        if (f.exists() && f.length() > 0) return f
+        val id = m.driveId ?: return null
+        return try {
+            Drive.scarica(ctx, id, f)
+            f
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Miniatura per le griglie. Per le foto di Drive non ancora scaricate usa l'anteprima di Drive
+     * (salvata nella cartella "miniature"), così non serve scaricare tutto. Bloccante.
+     */
+    fun miniaturaDi(ctx: Context, m: Media, lato: Int = 360): Bitmap? {
+        val f = file(ctx, m)
+        if (f.exists() && f.length() > 0) return miniatura(f, m.video, lato)
+        val id = m.driveId ?: return null
+        val mini = File(cartellaMiniature(ctx), "$id.jpg")
+        if (!mini.exists()) {
+            val ok = try { Drive.miniatura(ctx, id, mini) } catch (e: Exception) { false }
+            if (!ok) {
+                // niente anteprima: per le foto scarico il file intero, per i video rinuncio
+                if (m.video) return null
+                val intero = fileLocale(ctx, m) ?: return null
+                return miniatura(intero, false, lato)
+            }
+        }
+        return miniatura(mini, false, lato)
+    }
+
     fun nuovoFile(ctx: Context, estensione: String): File =
         File(cartella(ctx), "${System.currentTimeMillis()}-${UUID.randomUUID().toString().take(6)}.$estensione")
 
@@ -198,6 +234,8 @@ object Galleria {
 
     fun elimina(ctx: Context, m: Media) {
         file(ctx, m).delete()
+        val id = m.driveId
+        if (id != null) File(cartellaMiniature(ctx), "$id.jpg").delete()
         cache.remove(m.file)
     }
 }
@@ -210,7 +248,7 @@ fun Miniatura(med: Media, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val bmp by produceState<Bitmap?>(Galleria.cache.get(med.file), med.file) {
         if (value == null) {
             value = withContext(Dispatchers.IO) {
-                Galleria.miniatura(Galleria.file(ctx, med), med.video)?.also { Galleria.cache.put(med.file, it) }
+                Galleria.miniaturaDi(ctx, med)?.also { Galleria.cache.put(med.file, it) }
             }
         }
     }

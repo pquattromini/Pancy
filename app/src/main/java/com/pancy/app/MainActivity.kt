@@ -13,4 +13,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent { PancyTheme { PancyApp() } }
     }
+
+    override fun onResume() {
+        super.onResume()
+        // ogni volta che l'app torna in primo piano guarda se nel calendario ci sono appuntamenti nuovi
+        val m = Model.di(this)
+        m.importaDalCalendario(silenzioso = true)
+        m.sincronizzaDrive(silenzioso = true)
+    }
 }

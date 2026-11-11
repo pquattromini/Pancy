@@ -12,8 +12,8 @@ android {
         applicationId = "com.pancy.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 6
+        versionName = "1.5"
     }
 
     // Chiave di firma fissa: così ogni nuova versione si installa sopra la precedente senza perdere i dati
@@ -46,4 +46,6 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // accesso a Google Drive (autorizzazione con l'account Google)
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
 }
