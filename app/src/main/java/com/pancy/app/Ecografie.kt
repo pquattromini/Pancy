@@ -253,6 +253,20 @@ fun EcografiaScreen(m: Model, id: String, snack: SnackbarHostState) {
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
+                if (presenti.isNotEmpty() || immagini.isNotEmpty()) {
+                    Text(
+                        "Chiedi all'IA di spiegarle ›", style = MaterialTheme.typography.bodyMedium, color = cs.primary,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(top = 4.dp).clip(RoundedCornerShape(6.dp)).clickable {
+                            m.vai(
+                                Schermata.Chat(
+                                    null,
+                                    "Spiegami in parole semplici i risultati dell'ecografia «${e.titolo}» del ${dataMedia(e.data)}.",
+                                )
+                            )
+                        }.padding(vertical = 2.dp),
+                    )
+                }
                 presenti.forEachIndexed { i, mi ->
                     if (i > 0) HorizontalDivider(color = cs.outlineVariant)
                     Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {

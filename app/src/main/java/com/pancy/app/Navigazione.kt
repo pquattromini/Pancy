@@ -48,6 +48,10 @@ sealed interface Schermata {
     data class EcoDettaglio(val id: String) : Schermata
     /** [id] null = nuova ecografia; [daAppuntamento] = l'appuntamento da cui nasce. */
     data class EcoModifica(val id: String?, val daAppuntamento: String? = null) : Schermata
+    /** Elenco delle conversazioni con l'IA. */
+    data object ChiediIA : Schermata
+    /** Una conversazione; [id] null = nuova; [bozza] = domanda già scritta da completare. */
+    data class Chat(val id: String?, val bozza: String? = null) : Schermata
 }
 
 @Composable
@@ -82,6 +86,8 @@ fun PancyApp() {
         is Schermata.Visore -> VisoreScreen(m, s.id, s.ecografia)
         is Schermata.EcoDettaglio -> EcografiaScreen(m, s.id, snack)
         is Schermata.EcoModifica -> EcoModificaScreen(m, s.id, s.daAppuntamento, snack)
+        Schermata.ChiediIA -> ChiediIAScreen(m, snack)
+        is Schermata.Chat -> ChatScreen(m, s.id, s.bozza, snack)
     }
 }
 
@@ -99,11 +105,21 @@ fun BarraSuperiore(m: Model, titolo: String, settimana: Boolean = true) {
                     Text(
                         "Settimana ${g / 7}+${g % 7} · " + Gravidanza.nomeTrimestre(g),
                         style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
         },
         actions = {
+            FilledTonalButton(
+                onClick = { m.vai(Schermata.ChiediIA) },
+                contentPadding = PaddingValues(horizontal = 12.dp),
+                modifier = Modifier.height(36.dp),
+            ) {
+                Icon(painterResource(R.drawable.ic_ia), contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("IA", maxLines = 1, softWrap = false)
+            }
             IconButton(onClick = { m.vai(Schermata.Impostazioni) }) {
                 Icon(Icons.Filled.Settings, contentDescription = "Impostazioni")
             }

@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android 12 e successivi: il backup sul cloud esclude foto e video; il passaggio diretto a un nuovo telefono li porta tutti -->
+<!-- Android 12 e successivi. Backup sul cloud: niente foto, video e chiave API.
+     Passaggio diretto a un nuovo telefono: tutto tranne la chiave API. -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="media/" />
+        <exclude domain="file" path="chat/" />
+        <exclude domain="sharedpref" path="segreti.xml" />
     </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="segreti.xml" />
+    </device-transfer>
 </data-extraction-rules>

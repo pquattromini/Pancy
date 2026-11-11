@@ -3,6 +3,8 @@
     <!-- Solo se attivi la copia degli appuntamenti nel calendario del telefono -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <!-- Per "Chiedi all'IA" (collegamento a OpenAI) -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <application
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"

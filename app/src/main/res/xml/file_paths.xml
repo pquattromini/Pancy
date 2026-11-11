@@ -2,4 +2,5 @@
 <!-- Cartelle che l'app può passare ad altre app (fotocamera, condivisione) -->
 <paths>
     <files-path name="media" path="media/" />
+    <files-path name="chat" path="chat/" />
 </paths>

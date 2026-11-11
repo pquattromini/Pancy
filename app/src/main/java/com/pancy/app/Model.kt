@@ -27,6 +27,7 @@ private const val F_ECOGRAFIE = "ecografie.json"
 private const val F_MEDIA = "media.json"
 private const val F_PESI = "pesi.json"
 private const val F_CONSIGLI = "consigli.json"
+private const val F_CONVERSAZIONI = "conversazioni.json"
 
 /**
  * Stato dell'app. Ogni sezione ha il suo file JSON (vedi [Archivio]), le impostazioni stanno nelle preferenze.
@@ -47,6 +48,29 @@ class Model private constructor(private val ctx: Context) {
     var pesi by mutableStateOf(Peso.ordina(Archivio.carica(ctx, F_PESI, "pesi") { Peso.daJson(it) }))
         private set
     var consigli by mutableStateOf(Consiglio.ordina(Archivio.carica(ctx, F_CONSIGLI, "consigli") { Consiglio.daJson(it) }))
+        private set
+    var conversazioni by mutableStateOf(
+        Conversazione.ordina(Archivio.carica(ctx, F_CONVERSAZIONI, "conversazioni") { Conversazione.daJson(it) })
+    )
+        private set
+
+    /** La chiave sta in un file di preferenze a parte, escluso dal backup (vedi res/xml). */
+    private val segreti = ctx.getSharedPreferences("segreti", Context.MODE_PRIVATE)
+
+    /** Chiave API di OpenAI, se inserita. */
+    var chiaveIA by mutableStateOf(segreti.getString("openai", null))
+        private set
+
+    /** Modello OpenAI da usare. */
+    var modelloIA by mutableStateOf(prefs.getString("modelloIA", null) ?: MODELLO_PREDEFINITO)
+        private set
+
+    /** Conversazioni che aspettano la risposta dell'IA. */
+    var inAttesa by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    /** Vero mentre si prova la chiave dalle impostazioni. */
+    var verificaInCorso by mutableStateOf(false)
         private set
 
     /** Data presunta del parto, se l'hai inserita. */
@@ -306,6 +330,115 @@ class Model private constructor(private val ctx: Context) {
         messaggio = "Consiglio eliminato."
     }
 
+    // ---------------- Chiedi all'IA ----------------
+
+    fun conversazione(id: String): Conversazione? = conversazioni.firstOrNull { it.id == id }
+
+    fun impostaChiaveIA(k: String?) {
+        val pulita = k?.trim()?.takeIf { it.isNotEmpty() }
+        chiaveIA = pulita
+        segreti.edit().putString("openai", pulita).apply()
+    }
+
+    fun impostaModelloIA(nome: String) {
+        val n = nome.trim().ifEmpty { MODELLO_PREDEFINITO }
+        modelloIA = n
+        prefs.edit().putString("modelloIA", n).apply()
+    }
+
+    private fun aggiornaConversazione(c: Conversazione) {
+        conversazioni = Conversazione.ordina(conversazioni.filter { it.id != c.id } + c)
+        salvaConversazioni()
+    }
+
+    private fun aggiungiMessaggio(id: String, msg: Messaggio) {
+        val c = conversazione(id) ?: return
+        aggiornaConversazione(c.copy(messaggi = c.messaggi + msg, aggiornata = System.currentTimeMillis()))
+    }
+
+    /**
+     * Manda una domanda (con eventuali foto allegate) nella conversazione [id], o in una nuova se è null.
+     * Restituisce l'id della conversazione.
+     */
+    fun invia(id: String?, testo: String, allegati: List<String>): String {
+        val conv = id?.let { conversazione(it) } ?: Conversazione(titolo = Conversazione.titoloDa(testo))
+        aggiornaConversazione(
+            conv.copy(
+                messaggi = conv.messaggi + Messaggio(ia = false, testo = testo.trim(), allegati = allegati),
+                aggiornata = System.currentTimeMillis(),
+            )
+        )
+        rispondi(conv.id)
+        return conv.id
+    }
+
+    /** Se l'ultima risposta è fallita, la toglie e richiede la risposta. */
+    fun riprova(id: String) {
+        val c = conversazione(id) ?: return
+        val ultimo = c.messaggi.lastOrNull()
+        if (ultimo != null && ultimo.errore) aggiornaConversazione(c.copy(messaggi = c.messaggi.dropLast(1)))
+        rispondi(id)
+    }
+
+    private fun rispondi(id: String) {
+        val chiave = chiaveIA
+        if (chiave.isNullOrBlank()) {
+            aggiungiMessaggio(id, Messaggio(ia = true, testo = "Manca la chiave API di OpenAI: aggiungila nelle Impostazioni.", errore = true))
+            return
+        }
+        val conv = conversazione(id) ?: return
+        if (id in inAttesa) return
+        // il fascicolo si prepara qui, con i dati di adesso; la chiamata a OpenAI va in sottofondo
+        val istruzioni = Fascicolo.istruzioni(this)
+        val immagini = Fascicolo.immagini(this, ctx)
+        val modello = modelloIA
+        val storia = conv.messaggi
+        inAttesa = inAttesa + id
+        scope.launch {
+            val risposta = try {
+                val t = withContext(Dispatchers.IO) { Assistente.rispondi(ctx, chiave, modello, istruzioni, storia, immagini) }
+                Messaggio(ia = true, testo = t)
+            } catch (e: ErroreIA) {
+                Messaggio(ia = true, testo = e.message ?: "Errore da OpenAI.", errore = true)
+            } catch (e: java.io.IOException) {
+                Messaggio(ia = true, testo = "Non riesco a collegarmi a OpenAI: controlla la connessione a internet.", errore = true)
+            } catch (e: Exception) {
+                Messaggio(ia = true, testo = "Qualcosa è andato storto: " + (e.message ?: e.javaClass.simpleName), errore = true)
+            }
+            inAttesa = inAttesa - id
+            aggiungiMessaggio(id, risposta)
+        }
+    }
+
+    fun eliminaConversazione(id: String) {
+        val c = conversazione(id) ?: return
+        for (msg in c.messaggi) for (nome in msg.allegati) File(Assistente.cartellaChat(ctx), nome).delete()
+        conversazioni = conversazioni.filter { it.id != id }
+        salvaConversazioni()
+        messaggio = "Conversazione eliminata."
+    }
+
+    /** Prova chiave, credito e modello con una domanda minuscola. */
+    fun verificaIA() {
+        val chiave = chiaveIA ?: return
+        if (verificaInCorso) return
+        val modello = modelloIA
+        verificaInCorso = true
+        scope.launch {
+            messaggio = try {
+                withContext(Dispatchers.IO) { Assistente.prova(chiave, modello) }
+                "Tutto a posto: $modello ha risposto."
+            } catch (e: ErroreIA) {
+                e.message ?: "Errore da OpenAI."
+            } catch (e: java.io.IOException) {
+                "Non riesco a collegarmi a OpenAI: controlla la connessione a internet."
+            } catch (e: Exception) {
+                "Qualcosa è andato storto: " + (e.message ?: e.javaClass.simpleName)
+            }
+            verificaInCorso = false
+        }
+    }
+
     // ---------------- Salvataggio ----------------
 
     private fun salvaAppuntamenti() = Archivio.salva(ctx, F_APPUNTAMENTI, "appuntamenti", appuntamenti) { it.toJson() }
@@ -313,6 +446,7 @@ class Model private constructor(private val ctx: Context) {
     private fun salvaMedia() = Archivio.salva(ctx, F_MEDIA, "media", media) { it.toJson() }
     private fun salvaPesi() = Archivio.salva(ctx, F_PESI, "pesi", pesi) { it.toJson() }
     private fun salvaConsigli() = Archivio.salva(ctx, F_CONSIGLI, "consigli", consigli) { it.toJson() }
+    private fun salvaConversazioni() = Archivio.salva(ctx, F_CONVERSAZIONI, "conversazioni", conversazioni) { it.toJson() }
 
     companion object {
         @Volatile private var istanza: Model? = null

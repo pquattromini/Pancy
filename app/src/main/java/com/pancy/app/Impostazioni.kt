@@ -160,17 +160,21 @@ fun ImpostazioniScreen(m: Model, snack: SnackbarHostState) {
                 }
             }
 
+            // ---- Chiedi all'IA ----
+            SezioneIA(m)
+
             // ---- Dati ----
             TitoloSezione("Dati")
             Text(
                 "Su questo telefono: ${m.appuntamenti.size} appuntamenti, ${m.ecografie.size} ecografie, " +
-                    "${m.media.size} foto e video, ${m.pesi.size} pesate, ${m.consigli.size} consigli. " +
+                    "${m.media.size} foto e video, ${m.pesi.size} pesate, ${m.consigli.size} consigli, " +
+                    "${m.conversazioni.size} conversazioni con l'IA. " +
                     "Gli aggiornamenti dell'app li conservano.",
                 style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
             )
             Text(
-                "Appuntamenti, ecografie, pesi e consigli rientrano nel backup automatico di Android (se è attivo). " +
-                    "Foto e video invece occupano troppo spazio per quel backup e restano solo su questo telefono: " +
+                "Appuntamenti, ecografie, pesi, consigli e conversazioni rientrano nel backup automatico di Android (se è attivo). " +
+                    "Foto, video e foto allegate alla chat invece occupano troppo spazio per quel backup e restano solo su questo telefono: " +
                     "conservate anche gli originali nella galleria.",
                 style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp, bottom = 32.dp),
