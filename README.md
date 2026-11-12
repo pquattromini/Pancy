@@ -1,5 +1,5 @@
 # Pancy
-App Android per seguire la gravidanza. Versione 1.6: sei sezioni nella barra in basso, "Chiedi all'IA", calendario e Google Drive (anche per i PDF).
+App Android per seguire la gravidanza. Versione 1.7: sei sezioni nella barra in basso, "Chiedi all'IA", calendario e Google Drive (anche per i PDF).
 
 ## Sezioni
 | Sezione | Cosa fa |
@@ -9,7 +9,7 @@ App Android per seguire la gravidanza. Versione 1.6: sei sezioni nella barra in 
 | **Referti** | Esami del sangue e delle urine, test prenatali, tamponi, referti di visita, impegnative. Per ognuno: tipo, data, laboratorio o medico, esito in breve, note, PDF e foto del foglio. Gli esami in agenda già fatti compaiono come "da completare", e dall'appuntamento si aggiunge il referto. I PDF si leggono nell'app pagina per pagina (tocca per ingrandire) o si aprono con un'altra app. |
 | **Foto** | Foto e video dalla galleria o dalla fotocamera, divisi per settimana di gravidanza. Schermo intero con zoom, video, didascalia, condivisione. |
 | **Storico** | Peso della mamma (inserito a mano, con grafico e aumento dall'inizio) e peso stimato del bambino (preso dalle ecografie). |
-| **Chiedi all'IA** | Pulsante "IA" in alto in ogni sezione. Chat con un modello OpenAI che riceve a ogni domanda tutti i dati dell'app (il "fascicolo") e può chiedere di vedere le foto che servono. Si possono allegare foto (per esempio un referto). Conversazioni salvate. |
+| **Chiedi all'IA** | Pulsante "IA" in alto in ogni sezione. Chat con un modello OpenAI che riceve a ogni domanda tutti i dati dell'app (il "fascicolo") e può chiedere di vedere foto e PDF. Si possono allegare foto (per esempio un referto o la bilancia). L'IA può proporre modifiche ai dati, che si salvano solo toccando «Salva». Conversazioni salvate. |
 | **Consigli** | Cosa fare in questo periodo, calendario degli esami gratuiti (LEA 2017) collegato all'agenda, vaccini, alimentazione, quando chiamare subito, fonti ISS. Più i consigli ricevuti da medico e ostetrica. |
 
 La data presunta del parto (in Impostazioni) fa comparire ovunque la settimana di gravidanza (es. 20+3).
@@ -71,6 +71,14 @@ Foto, video, immagini e PDF si sincronizzano nei due sensi con tre cartelle di D
 - Strumento `guarda_file`: l'IA chiede i file per codice. Le immagini (`F-xxxxxx`) arrivano ridotte a 1600 px; i PDF (`D-xxxxxx`) arrivano interi come `input_file` (base64), così OpenAI ne legge testo e pagine. Limiti dell'app: 10 MB per PDF, 25 MB di PDF per risposta (OpenAI accetta fino a 50 MB per richiesta).
 - Modello predefinito `gpt-6.1-terra`, modificabile nelle impostazioni (elenco in `MODELLI_IA`).
 
+### Modifiche proposte dall'IA
+- Strumenti `proponi_peso`, `proponi_appuntamento`, `proponi_ecografia`, `proponi_referto`, `proponi_consiglio`, `proponi_foto`, `proponi_impostazioni` (in `Proposte.kt`, oggetto `Modifiche`).
+- L'app non salva niente da sola: controlla gli argomenti (date AAAA-MM-GG, numeri plausibili, codici esistenti) e crea una `Proposta`, salvata nel messaggio dell'IA. Se qualcosa non va, l'IA riceve il motivo e corregge.
+- Nella chat ogni proposta è una scheda (`SchedaProposta.kt`) con i valori nuovi, quelli di prima se si modifica qualcosa, e i pulsanti «Salva» e «Annulla». Al «Salva» `Model.confermaProposta` applica solo i campi proposti ai dati di quel momento.
+- Per modificare, l'IA usa i codici del fascicolo: `A-…` appuntamenti, `E-…` ecografie, `R-…` referti. Una pesata nello stesso giorno sostituisce quella che c'era; un'ecografia nella stessa data aggiorna quella esistente; le misure si aggiungono a quelle già inserite.
+- Con `foto_allegate` (o `proponi_foto`) le foto allegate all'ultima domanda si copiano nell'ecografia, nel referto o nella sezione Foto.
+- Niente eliminazioni. Nelle domande successive l'IA vede quali proposte sono state salvate o annullate.
+
 ## Come si compila
 A ogni push su `main` GitHub Actions compila l'APK (scheda **Actions** → ultima esecuzione → **Artifacts** → `pancy-apk`).
 La chiave di firma è fissa (`app/debug.keystore`), così gli aggiornamenti si installano sopra senza perdere i dati.
@@ -98,6 +106,7 @@ Il backup automatico di Android include tutto tranne `media/`, `chat/` e `miniat
 | `Grafico.kt` | grafico a linea usato nello Storico |
 | `Assistente.kt` | conversazioni, chiamata a OpenAI, fascicolo dei dati per l'IA |
 | `ChiediIA.kt` | schermate della chat e sezione IA delle impostazioni |
+| `Proposte.kt`, `SchedaProposta.kt` | modifiche proposte dall'IA: strumenti, controlli, scheda di conferma |
 | `Lista.kt`, `Dettaglio.kt`, `Modifica.kt` | Agenda |
 | `Referti.kt` | sezione Referti: elenco, dettaglio, modifica |
 | `Documento.kt` | visore dei PDF |

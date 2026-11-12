@@ -36,23 +36,33 @@ val DOMANDE_PRONTE = listOf(
 
 // ---------------- Conversazioni ----------------
 
-/** Un messaggio della chat. [allegati] sono nomi di file nella cartella "chat" dell'app. */
+/**
+ * Un messaggio della chat. [allegati] sono nomi di file nella cartella "chat" dell'app;
+ * [proposte] sono le modifiche ai dati proposte dall'IA in questa risposta, da confermare.
+ */
 data class Messaggio(
     val ia: Boolean,
     val testo: String,
     val data: Long = System.currentTimeMillis(),
     val allegati: List<String> = emptyList(),
     val errore: Boolean = false,
+    val proposte: List<Proposta> = emptyList(),
 ) {
     fun toJson(): JSONObject {
         val al = JSONArray()
         for (a in allegati) al.put(a)
-        return JSONObject()
+        val o = JSONObject()
             .put("ia", ia)
             .put("testo", testo)
             .put("data", data)
             .put("allegati", al)
             .put("errore", errore)
+        if (proposte.isNotEmpty()) {
+            val pr = JSONArray()
+            for (p in proposte) pr.put(p.toJson())
+            o.put("proposte", pr)
+        }
+        return o
     }
 
     companion object {
@@ -60,16 +70,23 @@ data class Messaggio(
             val al = ArrayList<String>()
             val arr = o.optJSONArray("allegati")
             if (arr != null) for (i in 0 until arr.length()) al.add(arr.getString(i))
+            val pr = ArrayList<Proposta>()
+            val parr = o.optJSONArray("proposte")
+            if (parr != null) for (i in 0 until parr.length()) pr.add(Proposta.daJson(parr.getJSONObject(i)))
             return Messaggio(
                 ia = o.optBoolean("ia"),
                 testo = o.optString("testo"),
                 data = o.optLong("data"),
                 allegati = al,
                 errore = o.optBoolean("errore"),
+                proposte = pr,
             )
         }
     }
 }
+
+/** La risposta dell'IA: il testo e le modifiche che propone. */
+class RispostaIA(val testo: String, val proposte: List<Proposta>)
 
 data class Conversazione(
     val id: String = UUID.randomUUID().toString(),
@@ -189,8 +206,8 @@ object Assistente {
         }
     }
 
-    /** L'unico strumento dell'IA: chiedere di vedere foto o leggere PDF dell'app. */
-    private fun strumenti(): JSONArray = JSONArray().put(
+    /** Gli strumenti dell'IA: guardare foto e PDF dell'app, e proporre modifiche ai dati (vedi [Modifiche]). */
+    private fun strumenti(): JSONArray = JSONArray().also { a -> for (s in Modifiche.strumenti()) a.put(s) }.put(
         JSONObject()
             .put("type", "function")
             .put("name", "guarda_file")
@@ -280,8 +297,8 @@ object Assistente {
 
     /**
      * Fa rispondere l'IA all'ultima domanda della conversazione.
-     * [istruzioni] contiene le regole e tutti i dati dell'app; [immagini] collega i codici F-… e D-… ai file.
-     * Bloccante: va chiamata fuori dal thread principale.
+     * [istruzioni] contiene le regole e tutti i dati dell'app; [immagini] collega i codici F-… e D-… ai file;
+     * [dati] serve a controllare le modifiche proposte. Bloccante: va chiamata fuori dal thread principale.
      */
     fun rispondi(
         ctx: Context,
@@ -290,14 +307,27 @@ object Assistente {
         istruzioni: String,
         storia: List<Messaggio>,
         immagini: Map<String, Media>,
-    ): String {
+        dati: DatiAttuali,
+    ): RispostaIA {
         val input = JSONArray()
+        val proposte = ArrayList<Proposta>()
+        // le foto dell'ultima domanda: l'IA può proporre di salvarle in un'ecografia, in un referto o nelle Foto
+        val allegatiUltimo = storia.lastOrNull { !it.ia && !it.errore }?.allegati ?: emptyList()
         // le foto allegate si rimandano solo per gli ultimi 3 messaggi che ne hanno, per non pagarle ogni volta
         val conAllegatiRecenti = storia.filter { !it.ia && !it.errore && it.allegati.isNotEmpty() }.takeLast(3)
         for (msg in storia) {
             if (msg.errore) continue
             if (msg.ia) {
-                input.put(JSONObject().put("role", "assistant").put("content", msg.testo))
+                // le schede proposte prima, con quello che l'utente ha deciso
+                val schede = msg.proposte.joinToString("\n") { p ->
+                    "- " + p.riassunto + ": " + when (p.stato) {
+                        Proposta.SALVATA -> "salvata dall'utente"
+                        Proposta.ANNULLATA -> "annullata dall'utente"
+                        else -> "non ancora confermata"
+                    }
+                }
+                val testo = if (schede.isEmpty()) msg.testo else msg.testo + "\n\n[Schede di conferma di questa risposta]\n" + schede
+                input.put(JSONObject().put("role", "assistant").put("content", testo))
                 continue
             }
             val parti = JSONArray().put(
@@ -340,14 +370,35 @@ object Assistente {
             }
             if (chiamate.isEmpty()) {
                 val t = testoDi(output)
-                if (t.isEmpty()) throw ErroreIA("L'IA non ha dato una risposta. Riprova, magari con un altro modello.")
-                return t
+                if (t.isEmpty() && proposte.isEmpty()) throw ErroreIA("L'IA non ha dato una risposta. Riprova, magari con un altro modello.")
+                return RispostaIA(t.ifEmpty { "Ecco cosa propongo: controlla e tocca «Salva»." }, proposte)
             }
 
             // l'IA vuole vedere dei file: rimetto tutto il suo output nel contesto, poi rispondo alle chiamate
             for (i in 0 until output.length()) input.put(output.get(i))
             val viste = JSONArray()
             for (c in chiamate) {
+                val nome = c.optString("name")
+                if (Modifiche.eUnaProposta(nome)) {
+                    // una modifica ai dati: la preparo come scheda da confermare, non la salvo
+                    val esito = if (proposte.size >= Modifiche.MAX_PER_RISPOSTA) {
+                        "Troppe proposte in una sola risposta: fermati qui e chiedi all'utente di confermare queste."
+                    } else {
+                        val pr = Modifiche.prepara(nome, c.optString("arguments"), dati, allegatiUltimo)
+                        val p = pr.proposta
+                        if (p != null) {
+                            proposte.add(p)
+                            "Proposta pronta e mostrata all'utente come scheda da confermare: ${p.riassunto}. " +
+                                "NON è ancora salvata: si salva solo se l'utente tocca «Salva» sulla scheda."
+                        } else {
+                            "Proposta non valida: ${pr.errore}. Correggi e riprova, oppure chiedi chiarimenti all'utente."
+                        }
+                    }
+                    input.put(
+                        JSONObject().put("type", "function_call_output").put("call_id", c.optString("call_id")).put("output", esito),
+                    )
+                    continue
+                }
                 val codici = try {
                     JSONObject(c.optString("arguments")).optJSONArray("codici")
                 } catch (e: Exception) {
@@ -423,6 +474,14 @@ Come rispondere:
 - Se per rispondere ti serve guardare foto o immagini delle ecografie, o leggere un referto, usa lo strumento guarda_file con i codici dei dati: F-… per le immagini, D-… per i documenti PDF. Chiedi solo quelli che servono davvero. Quando la domanda riguarda un referto che ha un PDF, leggilo prima di rispondere.
 - Puoi usare il **grassetto** ed elenchi con il trattino, ma niente tabelle.
 
+Modifiche ai dati:
+- Con gli strumenti proponi_… puoi proporre di aggiungere o modificare dati dell'app: pesi, appuntamenti, ecografie e misure, referti, consigli, foto, data presunta del parto e peso prima della gravidanza. Usali quando l'utente te lo chiede, anche quando ti manda un dato da registrare (per esempio la foto della bilancia, di un referto o della stampa di un'ecografia).
+- Ogni proposta compare all'utente come scheda con «Salva» e «Annulla»: niente viene salvato finché non tocca «Salva». Non dire mai che hai già salvato; di' che hai preparato la scheda da confermare.
+- I valori letti da foto o PDF vanno controllati bene: se un numero o una data non si leggono con sicurezza, chiedi invece di indovinare. Se manca l'anno, usa quello più vicino a oggi.
+- Per modificare un elemento usa il suo codice (A-… appuntamenti, E-… ecografie, R-… referti) e passa solo i campi da cambiare; per note ed esiti scrivi il testo completo nuovo, tenendo quello che c'era se va conservato.
+- Con foto_allegate (o con proponi_foto) le foto allegate all'ultimo messaggio dell'utente si salvano nell'app.
+- Non puoi eliminare niente: se l'utente lo chiede, spiega che può farlo dall'app.
+
 Limiti importanti:
 - Non sei un medico: non fare diagnosi, non dare dosi di farmaci e non suggerire di cambiare terapie. Per ogni decisione clinica rimanda al medico o all'ostetrica, e aiuta a preparare le domande da fare.
 - Se la domanda descrive un segnale di allarme (perdite di sangue, perdita di liquido, contrazioni regolari prima della 37a settimana, movimenti del bambino diminuiti o assenti, forte mal di testa con disturbi della vista o gonfiore improvviso, febbre alta, dolore forte alla pancia), di' prima di tutto di chiamare subito il punto nascita o il 112.
@@ -477,6 +536,7 @@ Limiti importanti:
         for (a in m.appuntamenti) {
             appendLine(
                 riga(
+                    Modifiche.codice(a),
                     ISO.format(a.data) + (a.ora?.let { " ore " + orario(it) } ?: ""),
                     a.tipo.nome, a.titolo, sett(m, a.data),
                     if (a.passato()) "già fatto" else "in programma",
@@ -496,7 +556,7 @@ Limiti importanti:
             val file = m.mediaDi(e.id)
             appendLine(
                 riga(
-                    ISO.format(e.data), e.titolo, sett(m, e.data),
+                    Modifiche.codice(e), ISO.format(e.data), e.titolo, sett(m, e.data),
                     if (misure.isEmpty()) "misure: non inserite" else "misure: " + misure.joinToString("; "),
                     e.note.takeIf { it.isNotBlank() }?.let { "note: $it" },
                     if (file.isEmpty()) null else "file: " + elencoFile(file),
@@ -512,7 +572,7 @@ Limiti importanti:
             val app = r.appuntamento?.let { m.trova(it) }
             appendLine(
                 riga(
-                    ISO.format(r.data), r.tipo.nome, r.titolo, sett(m, r.data),
+                    Modifiche.codice(r), ISO.format(r.data), r.tipo.nome, r.titolo, sett(m, r.data),
                     r.dove.takeIf { it.isNotBlank() }?.let { "presso: $it" },
                     r.esito.takeIf { it.isNotBlank() }?.let { "esito: $it" },
                     r.note.takeIf { it.isNotBlank() }?.let { "note: $it" },

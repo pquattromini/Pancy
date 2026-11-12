@@ -87,7 +87,8 @@ fun ChiediIAScreen(m: Model, snack: SnackbarHostState) {
             item(key = "intro") {
                 Text(
                     "Fai una domanda come a un'IA qualsiasi: in più legge tutti i dati dell'app (appuntamenti, ecografie, " +
-                        "referti, pesi, consigli, l'elenco di foto e video) e, quando serve, guarda le immagini e legge i PDF dei referti.",
+                        "referti, pesi, consigli, l'elenco di foto e video) e, quando serve, guarda le immagini e legge i PDF dei referti. " +
+                        "Può anche preparare modifiche (per esempio un peso letto dalla foto della bilancia): le salvi tu con «Salva».",
                     style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
                 )
             }
@@ -271,7 +272,11 @@ fun ChatScreen(m: Model, id: String?, bozza: String?, snack: SnackbarHostState) 
             }
             items(messaggi.size, key = { i -> "msg-$i" }) { i ->
                 val msg = messaggi[i]
-                Fumetto(msg, ultimo = i == messaggi.size - 1 && !attesa) { if (id != null) m.riprova(id) }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Fumetto(msg, ultimo = i == messaggi.size - 1 && !attesa) { if (id != null) m.riprova(id) }
+                    // le modifiche ai dati proposte dall'IA, da confermare
+                    if (id != null) for (p in msg.proposte) SchedaProposta(m, id, p)
+                }
             }
             if (attesa) {
                 item(key = "attesa") {

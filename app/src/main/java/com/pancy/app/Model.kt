@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.io.File
 import java.time.LocalDate
 import java.time.ZoneId
@@ -991,13 +992,14 @@ class Model private constructor(private val ctx: Context) {
         // il fascicolo si prepara qui, con i dati di adesso; la chiamata a OpenAI va in sottofondo
         val istruzioni = Fascicolo.istruzioni(this)
         val immagini = Fascicolo.immagini(this)
+        val dati = DatiAttuali(appuntamenti, ecografie, referti, pesi)
         val modello = modelloIA
         val storia = conv.messaggi
         inAttesa = inAttesa + id
         scope.launch {
             val risposta = try {
-                val t = withContext(Dispatchers.IO) { Assistente.rispondi(ctx, chiave, modello, istruzioni, storia, immagini) }
-                Messaggio(ia = true, testo = t)
+                val r = withContext(Dispatchers.IO) { Assistente.rispondi(ctx, chiave, modello, istruzioni, storia, immagini, dati) }
+                Messaggio(ia = true, testo = r.testo, proposte = r.proposte)
             } catch (e: ErroreIA) {
                 Messaggio(ia = true, testo = e.message ?: "Errore da OpenAI.", errore = true)
             } catch (e: java.io.IOException) {
@@ -1007,6 +1009,144 @@ class Model private constructor(private val ctx: Context) {
             }
             inAttesa = inAttesa - id
             aggiungiMessaggio(id, risposta)
+        }
+    }
+
+    // ---------------- Modifiche proposte dall'IA ----------------
+
+    private fun cambiaProposta(conv: String, proposta: String, cambia: (Proposta) -> Proposta) {
+        val c = conversazione(conv) ?: return
+        val msgs = c.messaggi.map { msg ->
+            if (msg.proposte.none { it.id == proposta }) msg
+            else msg.copy(proposte = msg.proposte.map { if (it.id == proposta) cambia(it) else it })
+        }
+        aggiornaConversazione(c.copy(messaggi = msgs))
+    }
+
+    fun annullaProposta(conv: String, proposta: String) {
+        cambiaProposta(conv, proposta) { if (it.stato == Proposta.ATTESA) it.copy(stato = Proposta.ANNULLATA) else it }
+    }
+
+    /** L'utente ha toccato «Salva» su una scheda dell'IA: applico la modifica con i dati di adesso. */
+    fun confermaProposta(conv: String, proposta: String) {
+        val p = conversazione(conv)?.messaggi?.flatMap { it.proposte }?.firstOrNull { it.id == proposta } ?: return
+        if (p.stato != Proposta.ATTESA) return
+        val c = try { JSONObject(p.campi) } catch (e: Exception) { JSONObject() }
+        val risultato = try {
+            applicaProposta(p, c)
+        } catch (e: Exception) {
+            messaggio = "Non sono riuscito a salvare: " + (e.message ?: e.javaClass.simpleName)
+            return
+        }
+        if (risultato == null) return
+        cambiaProposta(conv, proposta) { it.copy(stato = Proposta.SALVATA, risultato = risultato) }
+    }
+
+    /** Applica la proposta. Restituisce l'id dell'elemento salvato, o null (con il messaggio) se non si può. */
+    private fun applicaProposta(p: Proposta, c: JSONObject): String? {
+        val foto = Modifiche.fotoDi(c)
+        when (p.tipo) {
+            "peso" -> {
+                val data = LocalDate.parse(c.getString("data"))
+                // una pesata al giorno: se nel frattempo ne è comparsa una, la sostituisco
+                val esistente = p.bersaglio?.let { id -> pesi.firstOrNull { it.id == id } } ?: pesi.firstOrNull { it.data == data }
+                val nuovo = (esistente ?: Peso(data = data, kg = 0.0)).copy(data = data, kg = c.getDouble("kg"), nota = c.optString("nota"))
+                salvaPeso(nuovo)
+                messaggio = "Peso salvato nello Storico."
+                return nuovo.id
+            }
+            "appuntamento" -> {
+                val base = p.bersaglio?.let { trova(it) }
+                if (p.bersaglio != null && base == null) {
+                    messaggio = "L'appuntamento non c'è più: non posso modificarlo."
+                    return null
+                }
+                val a = Modifiche.applicaAppuntamento(base, c)
+                salva(a)
+                if (messaggio == null) messaggio = if (base == null) "Appuntamento aggiunto in agenda." else "Appuntamento aggiornato."
+                return a.id
+            }
+            "ecografia" -> {
+                val base = p.bersaglio?.let { ecografia(it) }
+                if (p.bersaglio != null && base == null) {
+                    messaggio = "L'ecografia non c'è più: non posso modificarla."
+                    return null
+                }
+                var e = Modifiche.applicaEcografia(base, c)
+                if (base == null) {
+                    // collego l'ecografia in agenda dello stesso giorno, se c'è
+                    val app = appuntamenti.firstOrNull { a -> a.tipo == Tipo.ECOGRAFIA && a.data == e.data && ecografie.none { it.appuntamento == a.id } }
+                    if (app != null) e = e.copy(appuntamento = app.id, titolo = if (c.has("titolo")) e.titolo else app.titolo)
+                }
+                salvaEcografia(e)
+                fotoDallaChat(foto, ecografia = e.id, referto = null, data = e.data, didascalia = "")
+                messaggio = if (base == null) "Ecografia salvata." else "Ecografia aggiornata."
+                return e.id
+            }
+            "referto" -> {
+                val base = p.bersaglio?.let { referto(it) }
+                if (p.bersaglio != null && base == null) {
+                    messaggio = "Il referto non c'è più: non posso modificarlo."
+                    return null
+                }
+                var r = Modifiche.applicaReferto(base, c)
+                // l'appuntamento indicato potrebbe essere stato eliminato nel frattempo
+                if (r.appuntamento?.let { trova(it) } == null) r = r.copy(appuntamento = null)
+                if (base == null && r.appuntamento == null) {
+                    // collego gli esami in agenda dello stesso giorno, se ancora senza referto
+                    val app = appuntamenti.firstOrNull { a -> a.tipo == Tipo.ESAMI && a.data == r.data && referti.none { it.appuntamento == a.id } }
+                    if (app != null) r = r.copy(appuntamento = app.id)
+                }
+                salvaReferto(r)
+                fotoDallaChat(foto, ecografia = null, referto = r.id, data = r.data, didascalia = "")
+                messaggio = if (base == null) "Referto salvato." else "Referto aggiornato."
+                return r.id
+            }
+            "consiglio" -> {
+                val k = Consiglio(data = LocalDate.parse(c.getString("data")), autore = c.optString("autore"), testo = c.getString("testo"))
+                salvaConsiglio(k)
+                messaggio = "Consiglio salvato."
+                return k.id
+            }
+            "foto" -> {
+                if (foto.isEmpty()) return null
+                fotoDallaChat(foto, ecografia = null, referto = null, data = LocalDate.parse(c.getString("data")), didascalia = c.optString("didascalia"))
+                messaggio = if (foto.size == 1) "Foto aggiunta alla sezione Foto." else "${foto.size} foto aggiunte alla sezione Foto."
+                return "foto"
+            }
+            "impostazioni" -> {
+                c.optString("data_parto").takeIf { it.isNotEmpty() }?.let { impostaDpp(LocalDate.parse(it)) }
+                if (c.has("peso_prima")) impostaPesoIniziale(c.getDouble("peso_prima"))
+                messaggio = "Impostazioni aggiornate."
+                return "impostazioni"
+            }
+        }
+        return null
+    }
+
+    /** Copia nell'app (sezione Foto, ecografia o referto) le foto allegate alla chat. */
+    private fun fotoDallaChat(nomi: List<String>, ecografia: String?, referto: String?, data: LocalDate, didascalia: String) {
+        if (nomi.isEmpty()) return
+        importazioni += 1
+        scope.launch {
+            val nuovi = withContext(Dispatchers.IO) {
+                nomi.mapNotNull { nome ->
+                    val src = File(Assistente.cartellaChat(ctx), nome)
+                    if (!src.exists()) return@mapNotNull null
+                    val dest = Galleria.nuovoFile(ctx, "jpg")
+                    try {
+                        src.copyTo(dest, overwrite = true)
+                        Media(file = dest.name, video = false, data = data, didascalia = didascalia, ecografia = ecografia, referto = referto)
+                    } catch (e: Exception) {
+                        dest.delete()
+                        null
+                    }
+                }
+            }
+            aggiungiMedia(nuovi)
+            importazioni -= 1
+            if (nuovi.size < nomi.size) messaggio = "Alcune foto della chat non ci sono più: salvate ${nuovi.size} su ${nomi.size}."
+            sincronizzaDrive(silenzioso = true, subito = true)
         }
     }
 
