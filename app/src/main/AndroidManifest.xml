@@ -5,6 +5,15 @@
     <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <!-- Per "Chiedi all'IA" (collegamento a OpenAI) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Per i messaggi vocali all'IA (si chiede solo quando tocchi il microfono) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <!-- Per leggere ad alta voce le risposte dell'IA con la sintesi vocale del telefono -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
     <application
         android:allowBackup="true"
         android:fullBackupContent="@xml/backup_rules"

@@ -39,6 +39,8 @@ val DOMANDE_PRONTE = listOf(
 /**
  * Un messaggio della chat. [allegati] sono nomi di file nella cartella "chat" dell'app;
  * [proposte] sono le modifiche ai dati proposte dall'IA in questa risposta, da confermare.
+ * Un messaggio vocale ha il file in [audio] (nella cartella "chat") e la sua [durata] in millisecondi;
+ * [testo] è la trascrizione, vuota finché non arriva.
  */
 data class Messaggio(
     val ia: Boolean,
@@ -47,6 +49,8 @@ data class Messaggio(
     val allegati: List<String> = emptyList(),
     val errore: Boolean = false,
     val proposte: List<Proposta> = emptyList(),
+    val audio: String? = null,
+    val durata: Long = 0,
 ) {
     fun toJson(): JSONObject {
         val al = JSONArray()
@@ -62,6 +66,7 @@ data class Messaggio(
             for (p in proposte) pr.put(p.toJson())
             o.put("proposte", pr)
         }
+        if (audio != null) o.put("audio", audio).put("durata", durata)
         return o
     }
 
@@ -80,6 +85,8 @@ data class Messaggio(
                 allegati = al,
                 errore = o.optBoolean("errore"),
                 proposte = pr,
+                audio = o.optString("audio").takeIf { it.isNotEmpty() },
+                durata = o.optLong("durata"),
             )
         }
     }
@@ -123,6 +130,8 @@ data class Conversazione(
         /** Dalla più recente. */
         fun ordina(l: List<Conversazione>): List<Conversazione> = l.sortedByDescending { it.aggiornata }
 
+        const val TITOLO_VOCALE = "Messaggio vocale"
+
         /** Titolo dalla prima domanda: le prime parole, al massimo 60 caratteri. */
         fun titoloDa(domanda: String): String {
             val t = domanda.trim().replace("\n", " ")
@@ -139,8 +148,88 @@ class ErroreIA(messaggio: String, val codice: Int = 0) : Exception(messaggio)
 /** Legge un campo di testo trattando il null di JSON come stringa vuota. */
 private fun JSONObject.testo(k: String): String = if (isNull(k)) "" else optString(k)
 
+/** Modelli per trascrivere i messaggi vocali, dal migliore: se uno non è disponibile per l'account si prova il successivo. */
+val MODELLI_TRASCRIZIONE = listOf("gpt-transcribe", "gpt-4o-transcribe", "whisper-1")
+
 object OpenAI {
     private const val INDIRIZZO = "https://api.openai.com/v1/responses"
+    private const val TRASCRIZIONE = "https://api.openai.com/v1/audio/transcriptions"
+
+    /** Contesto per la trascrizione: aiuta a riconoscere le parole della gravidanza. */
+    private const val CONTESTO_AUDIO =
+        "Messaggio vocale in italiano di una coppia che segue la gravidanza: visite, ecografie, esami, settimane, pesi e misure."
+
+    /**
+     * Trascrive un messaggio vocale con il modello di trascrizione di OpenAI. [parole] sono termini da riconoscere
+     * (nomi dei medici, esami...). Bloccante: va chiamata fuori dal thread principale.
+     */
+    fun trascrivi(chiave: String, f: File, parole: List<String>): String {
+        var ultimo: ErroreIA? = null
+        for (modello in MODELLI_TRASCRIZIONE) {
+            try {
+                return trascriviCon(chiave, f, modello, parole)
+            } catch (e: ErroreIA) {
+                // modello non disponibile per l'account, o parametri non accettati: provo il successivo
+                if (e.codice == 400 || e.codice == 403 || e.codice == 404) {
+                    ultimo = e
+                    continue
+                }
+                throw e
+            }
+        }
+        val e = ultimo
+        throw if (e == null || e.codice == 404) ErroreIA("Nessun modello di trascrizione di OpenAI è disponibile per il tuo account.") else e
+    }
+
+    /** I campi della richiesta di trascrizione per quel modello (lingua italiana, contesto, parole da riconoscere). */
+    fun campiAudio(modello: String, parole: List<String>): List<Pair<String, String>> {
+        val campi = arrayListOf("model" to modello, "response_format" to "json", "prompt" to CONTESTO_AUDIO)
+        if (modello == "gpt-transcribe") {
+            campi.add("languages[]" to "it")
+            for (p in parole) campi.add("keywords[]" to p)
+        } else {
+            campi.add("language" to "it")
+        }
+        return campi
+    }
+
+    /** Scrive la richiesta multipart/form-data: i campi di testo e poi il file audio. */
+    fun scriviRichiestaAudio(out: java.io.OutputStream, confine: String, campi: List<Pair<String, String>>, f: File) {
+        val utf8 = Charsets.UTF_8
+        for ((nome, valore) in campi) {
+            out.write("--$confine\r\nContent-Disposition: form-data; name=\"$nome\"\r\n\r\n".toByteArray(utf8))
+            out.write(valore.toByteArray(utf8))
+            out.write("\r\n".toByteArray(utf8))
+        }
+        out.write(
+            ("--$confine\r\nContent-Disposition: form-data; name=\"file\"; filename=\"${f.name}\"\r\n" +
+                "Content-Type: audio/mp4\r\n\r\n").toByteArray(utf8),
+        )
+        f.inputStream().use { it.copyTo(out) }
+        out.write("\r\n--$confine--\r\n".toByteArray(utf8))
+    }
+
+    private fun trascriviCon(chiave: String, f: File, modello: String, parole: List<String>): String {
+        val confine = "pancy" + UUID.randomUUID().toString().replace("-", "")
+        val c = URL(TRASCRIZIONE).openConnection() as HttpURLConnection
+        try {
+            c.requestMethod = "POST"
+            c.connectTimeout = 20_000
+            c.readTimeout = 300_000 // un vocale lungo (per esempio una visita) richiede tempo
+            c.doOutput = true
+            c.setChunkedStreamingMode(64 * 1024)
+            c.setRequestProperty("Authorization", "Bearer " + chiave.trim())
+            c.setRequestProperty("Content-Type", "multipart/form-data; boundary=$confine")
+            c.outputStream.use { out -> scriviRichiestaAudio(out, confine, campiAudio(modello, parole), f) }
+            val codice = c.responseCode
+            val flusso = if (codice in 200..299) c.inputStream else c.errorStream
+            val testo = flusso?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            if (codice !in 200..299) throw ErroreIA(spiegaErrore(codice, testo), codice)
+            return JSONObject(testo).optString("text").trim()
+        } finally {
+            c.disconnect()
+        }
+    }
 
     /** Manda una richiesta all'API Responses di OpenAI. Bloccante: va chiamata fuori dal thread principale. */
     fun invia(chiave: String, corpo: JSONObject): JSONObject {
@@ -330,9 +419,12 @@ object Assistente {
                 input.put(JSONObject().put("role", "assistant").put("content", testo))
                 continue
             }
-            val parti = JSONArray().put(
-                JSONObject().put("type", "input_text").put("text", msg.testo.ifBlank { "Guarda le foto allegate." }),
-            )
+            val domanda = when {
+                msg.audio != null && msg.testo.isNotBlank() -> "(Messaggio vocale, trascritto automaticamente) " + msg.testo
+                msg.audio != null -> "(Messaggio vocale che non è stato possibile trascrivere)"
+                else -> msg.testo.ifBlank { "Guarda le foto allegate." }
+            }
+            val parti = JSONArray().put(JSONObject().put("type", "input_text").put("text", domanda))
             if (msg.allegati.isNotEmpty()) {
                 if (conAllegatiRecenti.any { it === msg }) {
                     for (nome in msg.allegati) {
@@ -473,6 +565,7 @@ Come rispondere:
 - Per le domande generali puoi usare le tue conoscenze, ma distingui sempre cosa viene dai loro dati e cosa è un'informazione generale.
 - Se per rispondere ti serve guardare foto o immagini delle ecografie, o leggere un referto, usa lo strumento guarda_file con i codici dei dati: F-… per le immagini, D-… per i documenti PDF. Chiedi solo quelli che servono davvero. Quando la domanda riguarda un referto che ha un PDF, leggilo prima di rispondere.
 - Puoi usare il **grassetto** ed elenchi con il trattino, ma niente tabelle.
+- I messaggi vocali arrivano trascritti automaticamente: se una parola sembra sbagliata (per esempio un termine medico o un numero), interpretala con buon senso o chiedi conferma. Se il vocale è la registrazione di una visita, aiuta a riassumere cosa è stato detto. Le tue risposte possono essere lette ad alta voce: tienile scorrevoli anche da ascoltare.
 
 Modifiche ai dati:
 - Con gli strumenti proponi_… puoi proporre di aggiungere o modificare dati dell'app: pesi, appuntamenti, ecografie e misure, referti, consigli, foto, data presunta del parto e peso prima della gravidanza. Usali quando l'utente te lo chiede, anche quando ti manda un dato da registrare (per esempio la foto della bilancia, di un referto o della stampa di un'ecografia).

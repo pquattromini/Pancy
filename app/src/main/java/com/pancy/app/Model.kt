@@ -79,6 +79,12 @@ class Model private constructor(private val ctx: Context) {
     /** Conversazioni che aspettano la risposta dell'IA. */
     var inAttesa by mutableStateOf<Set<String>>(emptySet())
         private set
+    /** Conversazioni in cui si sta trascrivendo un messaggio vocale. */
+    var trascrivendo by mutableStateOf<Set<String>>(emptySet())
+        private set
+    /** Leggere ad alta voce le risposte dell'IA ai messaggi vocali. */
+    var leggiRisposte by mutableStateOf(prefs.getBoolean("leggiRisposte", true))
+        private set
 
     /** Vero mentre si prova la chiave dalle impostazioni. */
     var verificaInCorso by mutableStateOf(false)
@@ -947,6 +953,11 @@ class Model private constructor(private val ctx: Context) {
         prefs.edit().putString("modelloIA", n).apply()
     }
 
+    fun impostaLeggiRisposte(si: Boolean) {
+        leggiRisposte = si
+        prefs.edit().putBoolean("leggiRisposte", si).apply()
+    }
+
     private fun aggiornaConversazione(c: Conversazione) {
         conversazioni = Conversazione.ordina(conversazioni.filter { it.id != c.id } + c)
         salvaConversazioni()
@@ -973,6 +984,64 @@ class Model private constructor(private val ctx: Context) {
         return conv.id
     }
 
+    /**
+     * Manda un messaggio vocale ([audio] è un file nella cartella della chat), con eventuali foto allegate,
+     * nella conversazione [id] o in una nuova. Prima si trascrive, poi risponde l'IA. Restituisce l'id della conversazione.
+     */
+    fun inviaVocale(id: String?, audio: String, durata: Long, allegati: List<String>): String {
+        val conv = id?.let { conversazione(it) } ?: Conversazione(titolo = Conversazione.TITOLO_VOCALE)
+        aggiornaConversazione(
+            conv.copy(
+                messaggi = conv.messaggi + Messaggio(ia = false, testo = "", allegati = allegati, audio = audio, durata = durata),
+                aggiornata = System.currentTimeMillis(),
+            )
+        )
+        rispondi(conv.id)
+        return conv.id
+    }
+
+    /** Parole che aiutano a trascrivere: termini della gravidanza e nomi dei medici in agenda. */
+    private fun paroleUtili(): List<String> =
+        (
+            appuntamenti.map { it.medico.trim() }.filter { it.length in 3..40 }.distinct().take(10) +
+                listOf("ecografia", "translucenza nucale", "toxo test", "rubeo test", "curva glicemica", "emocromo", "morfologica", "ostetrica")
+            ).distinct()
+
+    /** Trascrive il vocale [nome] della conversazione [id]; poi fa rispondere l'IA. */
+    private fun trascriviERispondi(id: String, chiave: String, nome: String) {
+        if (id in trascrivendo) return
+        val parole = paroleUtili()
+        trascrivendo = trascrivendo + id
+        scope.launch {
+            val esito = try {
+                val t = withContext(Dispatchers.IO) { OpenAI.trascrivi(chiave, File(Assistente.cartellaChat(ctx), nome), parole) }
+                if (t.isBlank()) Result.failure(ErroreIA("Nel messaggio vocale non ho sentito parole. Riprova parlando vicino al telefono."))
+                else Result.success(t)
+            } catch (e: ErroreIA) {
+                Result.failure(e)
+            } catch (e: java.io.IOException) {
+                Result.failure(ErroreIA("Non riesco a collegarmi a OpenAI: controlla la connessione a internet."))
+            } catch (e: Exception) {
+                Result.failure(ErroreIA("Qualcosa è andato storto: " + (e.message ?: e.javaClass.simpleName)))
+            }
+            trascrivendo = trascrivendo - id
+            val c = conversazione(id) ?: return@launch
+            val t = esito.getOrNull()
+            if (t == null) {
+                aggiungiMessaggio(id, Messaggio(ia = true, testo = esito.exceptionOrNull()?.message ?: "Trascrizione non riuscita.", errore = true))
+                return@launch
+            }
+            aggiornaConversazione(
+                c.copy(
+                    messaggi = c.messaggi.map { if (it.audio == nome) it.copy(testo = t) else it },
+                    // una conversazione iniziata a voce prende il titolo dalla trascrizione
+                    titolo = if (c.titolo == Conversazione.TITOLO_VOCALE) Conversazione.titoloDa(t) else c.titolo,
+                )
+            )
+            rispondi(id)
+        }
+    }
+
     /** Se l'ultima risposta è fallita, la toglie e richiede la risposta. */
     fun riprova(id: String) {
         val c = conversazione(id) ?: return
@@ -988,7 +1057,14 @@ class Model private constructor(private val ctx: Context) {
             return
         }
         val conv = conversazione(id) ?: return
-        if (id in inAttesa) return
+        if (id in inAttesa || id in trascrivendo) return
+        // un messaggio vocale ancora da trascrivere: prima la trascrizione
+        val ultimaDomanda = conv.messaggi.lastOrNull { !it.ia }
+        val audio = ultimaDomanda?.audio
+        if (ultimaDomanda != null && audio != null && ultimaDomanda.testo.isBlank()) {
+            trascriviERispondi(id, chiave, audio)
+            return
+        }
         // il fascicolo si prepara qui, con i dati di adesso; la chiamata a OpenAI va in sottofondo
         val istruzioni = Fascicolo.istruzioni(this)
         val immagini = Fascicolo.immagini(this)
@@ -1152,7 +1228,10 @@ class Model private constructor(private val ctx: Context) {
 
     fun eliminaConversazione(id: String) {
         val c = conversazione(id) ?: return
-        for (msg in c.messaggi) for (nome in msg.allegati) File(Assistente.cartellaChat(ctx), nome).delete()
+        for (msg in c.messaggi) {
+            for (nome in msg.allegati) File(Assistente.cartellaChat(ctx), nome).delete()
+            msg.audio?.let { File(Assistente.cartellaChat(ctx), it).delete() }
+        }
         conversazioni = conversazioni.filter { it.id != id }
         salvaConversazioni()
         messaggio = "Conversazione eliminata."

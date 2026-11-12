@@ -2,7 +2,9 @@
 
 package com.pancy.app
 
+import android.Manifest
 import android.content.ActivityNotFoundException
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -25,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -46,7 +49,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -88,7 +93,8 @@ fun ChiediIAScreen(m: Model, snack: SnackbarHostState) {
                 Text(
                     "Fai una domanda come a un'IA qualsiasi: in più legge tutti i dati dell'app (appuntamenti, ecografie, " +
                         "referti, pesi, consigli, l'elenco di foto e video) e, quando serve, guarda le immagini e legge i PDF dei referti. " +
-                        "Può anche preparare modifiche (per esempio un peso letto dalla foto della bilancia): le salvi tu con «Salva».",
+                        "Può anche preparare modifiche (per esempio un peso letto dalla foto della bilancia): le salvi tu con «Salva». " +
+                        "Puoi anche parlarle: tocca il microfono nella chat.",
                     style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
                 )
             }
@@ -134,6 +140,7 @@ fun ChiediIAScreen(m: Model, snack: SnackbarHostState) {
                         )
                         val quando = Instant.ofEpochMilli(c.aggiornata).atZone(ZoneId.systemDefault()).toLocalDate()
                         val stato = when {
+                            c.id in m.trascrivendo -> "Trascrivo il messaggio vocale…"
                             c.id in m.inAttesa -> "L'IA sta rispondendo…"
                             ultimo != null && ultimo.errore -> "Risposta non arrivata"
                             ultimo != null && ultimo.ia -> ultimo.testo.replace("**", "").lines().firstOrNull { it.isNotBlank() } ?: ""
@@ -162,16 +169,80 @@ fun ChatScreen(m: Model, id: String?, bozza: String?, snack: SnackbarHostState) 
         return
     }
     val messaggi = conv?.messaggi ?: emptyList()
-    val attesa = id != null && id in m.inAttesa
+    val trascrive = id != null && id in m.trascrivendo
+    val attesa = id != null && (id in m.inAttesa || trascrive)
     var testo by rememberSaveable(id) { mutableStateOf(bozza ?: "") }
     var allegati by rememberSaveable(id) { mutableStateOf<List<String>>(emptyList()) }
     var chiediElimina by remember { mutableStateOf(false) }
     val lista = rememberLazyListState()
     val allega = rememberAllegaFoto(m) { nuovi -> allegati = allegati + nuovi }
+    val registratore = remember { Registratore(ctx) }
+    var registrando by remember { mutableStateOf(false) }
+    var tempo by remember { mutableStateOf(0L) }
+    val apertura = remember { System.currentTimeMillis() }
 
     // scorre in fondo quando arriva un messaggio
     val elementi = 1 + messaggi.size + (if (attesa) 1 else 0)
     LaunchedEffect(elementi) { lista.animateScrollToItem(elementi - 1) }
+
+    // la risposta a un messaggio vocale si legge ad alta voce (se l'opzione è attiva)
+    LaunchedEffect(messaggi.size) {
+        val ultimo = messaggi.lastOrNull() ?: return@LaunchedEffect
+        val domanda = messaggi.lastOrNull { !it.ia }
+        if (m.leggiRisposte && ultimo.ia && !ultimo.errore && ultimo.data > apertura && domanda?.audio != null) {
+            Voce.parla(ctx, ultimo.data.toString(), ultimo.testo)
+        }
+    }
+    // il contatore mentre si registra
+    LaunchedEffect(registrando) {
+        while (registrando) {
+            tempo = registratore.durata()
+            delay(250)
+        }
+    }
+    // uscendo dalla chat: niente registrazioni, letture o riascolti a metà
+    DisposableEffect(Unit) {
+        onDispose {
+            registratore.annulla()
+            Voce.ferma()
+            Riproduttore.ferma()
+        }
+    }
+
+    fun inviaVocale() {
+        val r = registratore.ferma()
+        registrando = false
+        if (r == null) {
+            m.messaggio = "Messaggio vocale troppo corto: tocca il microfono, parla, poi tocca invia."
+            return
+        }
+        val nuovoId = m.inviaVocale(id, r.first.name, r.second, allegati)
+        allegati = emptyList()
+        if (id == null) m.sostituisci(Schermata.Chat(nuovoId))
+    }
+
+    fun avviaRegistrazione() {
+        Voce.ferma()
+        Riproduttore.ferma()
+        if (registratore.avvia(onLimite = { inviaVocale() })) {
+            tempo = 0
+            registrando = true
+        } else {
+            m.messaggio = "Non riesco ad accendere il microfono."
+        }
+    }
+
+    val permessoMicrofono = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) avviaRegistrazione() else m.messaggio = "Per i messaggi vocali serve il permesso del microfono."
+    }
+
+    fun microfono() {
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            avviaRegistrazione()
+        } else {
+            permessoMicrofono.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
     fun invia() {
         val t = testo.trim()
@@ -231,7 +302,28 @@ fun ChatScreen(m: Model, id: String?, bozza: String?, snack: SnackbarHostState) 
                             }
                         }
                     }
-                    Row(verticalAlignment = Alignment.Bottom) {
+                    if (registrando) {
+                        // mentre si registra: annulla, tempo, invia
+                        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = {
+                                registratore.annulla()
+                                registrando = false
+                            }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Butta via il vocale", tint = cs.error)
+                            }
+                            Box(Modifier.size(10.dp).clip(CircleShape).background(cs.error))
+                            Spacer(Modifier.width(8.dp))
+                            Text(durataVocale(tempo), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                "Sto registrando…", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
+                                maxLines = 1, modifier = Modifier.weight(1f),
+                            )
+                            FilledIconButton(onClick = { inviaVocale() }) {
+                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Invia il vocale")
+                            }
+                        }
+                    } else Row(verticalAlignment = Alignment.Bottom) {
                         IconButton(onClick = allega, enabled = !attesa) {
                             Icon(painterResource(R.drawable.ic_foto), contentDescription = "Allega una foto")
                         }
@@ -243,6 +335,11 @@ fun ChatScreen(m: Model, id: String?, bozza: String?, snack: SnackbarHostState) 
                             maxLines = 5,
                             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
                         )
+                        if (testo.isBlank()) {
+                            IconButton(onClick = { microfono() }, enabled = !attesa) {
+                                Icon(painterResource(R.drawable.ic_microfono), contentDescription = "Messaggio vocale")
+                            }
+                        }
                         val puoInviare = !attesa && (testo.isNotBlank() || allegati.isNotEmpty())
                         IconButton(onClick = { invia() }, enabled = puoInviare) {
                             Icon(
@@ -273,7 +370,7 @@ fun ChatScreen(m: Model, id: String?, bozza: String?, snack: SnackbarHostState) 
             items(messaggi.size, key = { i -> "msg-$i" }) { i ->
                 val msg = messaggi[i]
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Fumetto(msg, ultimo = i == messaggi.size - 1 && !attesa) { if (id != null) m.riprova(id) }
+                    Fumetto(msg, ultimo = i == messaggi.size - 1 && !attesa, trascrive = trascrive) { if (id != null) m.riprova(id) }
                     // le modifiche ai dati proposte dall'IA, da confermare
                     if (id != null) for (p in msg.proposte) SchedaProposta(m, id, p)
                 }
@@ -283,7 +380,10 @@ fun ChatScreen(m: Model, id: String?, bozza: String?, snack: SnackbarHostState) 
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 4.dp)) {
                         CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(10.dp))
-                        Text("Sto leggendo i vostri dati…", style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant)
+                        Text(
+                            if (trascrive) "Ascolto il messaggio vocale…" else "Sto leggendo i vostri dati…",
+                            style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -308,7 +408,7 @@ fun ChatScreen(m: Model, id: String?, bozza: String?, snack: SnackbarHostState) 
 }
 
 @Composable
-private fun Fumetto(msg: Messaggio, ultimo: Boolean, onRiprova: () -> Unit) {
+private fun Fumetto(msg: Messaggio, ultimo: Boolean, trascrive: Boolean, onRiprova: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val ctx = LocalContext.current
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (msg.ia) Arrangement.Start else Arrangement.End) {
@@ -336,7 +436,38 @@ private fun Fumetto(msg: Messaggio, ultimo: Boolean, onRiprova: () -> Unit) {
                         for (nome in msg.allegati.take(4)) MiniaturaFile(File(Assistente.cartellaChat(ctx), nome), 64.dp)
                     }
                 }
-                if (msg.testo.isNotBlank()) {
+                val audio = msg.audio
+                if (audio != null) {
+                    // messaggio vocale: riascolto e trascrizione
+                    val f = File(Assistente.cartellaChat(ctx), audio)
+                    val suona = Riproduttore.inCorso == audio
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { if (suona) Riproduttore.ferma() else if (f.exists()) Riproduttore.suona(f) },
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            if (suona) {
+                                Icon(painterResource(R.drawable.ic_stop), contentDescription = "Ferma")
+                            } else {
+                                Icon(Icons.Filled.PlayArrow, contentDescription = "Riascolta il vocale")
+                            }
+                        }
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "Messaggio vocale · " + durataVocale(msg.durata),
+                            style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                    if (msg.testo.isBlank()) {
+                        Text(
+                            if (trascrive) "Trascrivo…" else "Non trascritto",
+                            style = MaterialTheme.typography.bodySmall, color = LocalContentColor.current.copy(alpha = 0.7f),
+                        )
+                    } else {
+                        Spacer(Modifier.height(4.dp))
+                        TrascrizioneVocale(msg.testo)
+                    }
+                } else if (msg.testo.isNotBlank()) {
                     SelectionContainer {
                         Text(
                             if (msg.ia && !msg.errore) testoFormattato(msg.testo) else AnnotatedString(msg.testo),
@@ -344,11 +475,48 @@ private fun Fumetto(msg: Messaggio, ultimo: Boolean, onRiprova: () -> Unit) {
                         )
                     }
                 }
+                if (msg.ia && !msg.errore && msg.testo.isNotBlank()) {
+                    // ascolta la risposta con la voce del telefono
+                    val chiave = msg.data.toString()
+                    val legge = Voce.inLettura == chiave
+                    TextButton(
+                        onClick = { if (legge) Voce.ferma() else Voce.parla(ctx, chiave, msg.testo) },
+                        contentPadding = PaddingValues(horizontal = 0.dp),
+                        modifier = Modifier.padding(top = 2.dp).height(32.dp),
+                    ) {
+                        Icon(
+                            painterResource(if (legge) R.drawable.ic_stop else R.drawable.ic_altoparlante),
+                            contentDescription = null, modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (legge) "Ferma" else "Ascolta")
+                    }
+                }
                 if (msg.errore && ultimo) {
                     TextButton(onClick = onRiprova, contentPadding = PaddingValues(horizontal = 0.dp)) { Text("Riprova") }
                 }
             }
         }
+    }
+}
+
+/** La trascrizione di un vocale: le prime righe, con «Mostra tutto» se è lunga (per esempio una visita registrata). */
+@Composable
+private fun TrascrizioneVocale(testo: String) {
+    var tutto by remember(testo) { mutableStateOf(false) }
+    var lunga by remember(testo) { mutableStateOf(false) }
+    SelectionContainer {
+        Text(
+            testo, style = MaterialTheme.typography.bodyMedium,
+            maxLines = if (tutto) Int.MAX_VALUE else 6, overflow = TextOverflow.Ellipsis,
+            onTextLayout = { if (!tutto) lunga = it.hasVisualOverflow },
+        )
+    }
+    if (lunga || tutto) {
+        Text(
+            if (tutto) "Mostra meno" else "Mostra tutto", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(top = 4.dp).clickableTesto { tutto = !tutto },
+        )
     }
 }
 
@@ -480,6 +648,16 @@ fun SezioneIA(m: Model) {
             "In uso: ${m.modelloIA}", style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp),
         )
+        Row(Modifier.fillMaxWidth().padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text("Leggi ad alta voce le risposte ai vocali", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    "Con la voce del telefono. Ogni risposta ha comunque il pulsante «Ascolta».",
+                    style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
+                )
+            }
+            Switch(checked = m.leggiRisposte, onCheckedChange = { m.impostaLeggiRisposte(it) })
+        }
         if (!k.isNullOrBlank()) {
             OutlinedButton(
                 onClick = { m.verificaIA() },
@@ -488,7 +666,7 @@ fun SezioneIA(m: Model) {
             ) { Text(if (m.verificaInCorso) "Verifico…" else "Verifica chiave e credito") }
         }
         Text(
-            "Le domande e i dati dell'app, comprese le foto e i PDF che l'IA chiede di guardare, vengono inviati a OpenAI. " +
+            "Le domande e i dati dell'app, comprese le foto e i PDF che l'IA chiede di guardare e i messaggi vocali (per trascriverli), vengono inviati a OpenAI. " +
                 "Di base OpenAI non usa i dati inviati con l'API per addestrare i suoi modelli. " +
                 "La chiave resta solo su questo telefono e non va nel backup.",
             style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
