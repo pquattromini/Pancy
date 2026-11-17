@@ -20,5 +20,13 @@ class MainActivity : ComponentActivity() {
         val m = Model.di(this)
         m.importaDalCalendario(silenzioso = true)
         m.sincronizzaDrive(silenzioso = true)
+        // una volta per avvio: c'è su Drive un backup più recente (per esempio dopo una reinstallazione)?
+        m.controllaBackup()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // l'app va in secondo piano: il backup in attesa parte subito
+        Model.di(this).backupInSospeso()
     }
 }

@@ -105,7 +105,7 @@ private fun apri(p: Proposta, m: Model) {
         "referto" -> m.vai(Schermata.RefDettaglio(id))
         "peso" -> m.apriSezione(Sezione.STORICO)
         "consiglio" -> m.apriSezione(Sezione.CONSIGLI)
-        "foto" -> m.apriSezione(Sezione.FOTO)
+        "foto" -> if (id == ALBUM_GENITORI) m.vai(Schermata.Album(id)) else m.apriSezione(Sezione.FOTO)
         "impostazioni" -> m.vai(Schermata.Impostazioni)
     }
 }

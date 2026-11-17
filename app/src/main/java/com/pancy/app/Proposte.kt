@@ -164,8 +164,10 @@ object Modifiche {
         ),
         strumento(
             "proponi_foto",
-            "Propone di aggiungere alla sezione Foto le foto allegate all'ultimo messaggio dell'utente.",
-            JSONObject().put("data", testo("$DATA (se omessa, oggi)")).put("didascalia", testo("Didascalia facoltativa")),
+            "Propone di aggiungere alla sezione Foto le foto allegate all'ultimo messaggio dell'utente: " +
+                "nelle foto della gravidanza oppure nell'album «Mamma e papà» (foto dei genitori non legate alla gravidanza).",
+            JSONObject().put("data", testo("$DATA (se omessa, oggi)")).put("didascalia", testo("Didascalia facoltativa"))
+                .put("album", scelta("Dove salvarle (se omesso, gravidanza)", listOf("gravidanza", "mamma_e_papa"))),
             emptyList(),
         ),
         strumento(
@@ -369,9 +371,16 @@ object Modifiche {
 
     private fun fotoGalleria(o: JSONObject, allegati: List<String>): Proposta {
         val data = o.dataDi("data") ?: LocalDate.now()
+        val genitori = when (val a = o.stringa("album").orEmpty()) {
+            "", "gravidanza" -> false
+            "mamma_e_papa" -> true
+            else -> throw Errore("album «$a» sconosciuto")
+        }
         val campi = JSONObject().put("data", data.toString()).put("didascalia", o.stringa("didascalia").orEmpty())
             .put("foto", fotoAllegate(allegati))
-        return Proposta(tipo = "foto", campi = campi.toString(), riassunto = "${allegati.size} foto nella sezione Foto")
+        if (genitori) campi.put("album", ALBUM_GENITORI)
+        val dove = if (genitori) "nell'album Mamma e papà" else "nella sezione Foto"
+        return Proposta(tipo = "foto", campi = campi.toString(), riassunto = "${allegati.size} foto $dove")
     }
 
     private fun impostazioni(o: JSONObject): Proposta {
@@ -526,6 +535,7 @@ object Modifiche {
                 riga("Giorno", d(c.optString("data")), null)
             }
             "foto" -> {
+                riga("Dove", if (c.has("album")) "Mamma e papà" else "Foto della gravidanza", null)
                 riga("Giorno", d(c.optString("data")), null)
                 c.optString("didascalia").takeIf { it.isNotBlank() }?.let { riga("Didascalia", it, null) }
             }

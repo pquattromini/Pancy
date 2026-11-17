@@ -93,7 +93,7 @@ fun AvvisoDrive(m: Model, modifier: Modifier = Modifier) {
 fun SezioneDrive(m: Model) {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
-    var sceltaCartella by remember { mutableStateOf(0) } // 1 = foto, 2 = ecografie, 3 = referti
+    var sceltaCartella by remember { mutableStateOf(0) } // 1 = foto, 2 = ecografie, 3 = referti, 4 = mamma e papà
     var chiediScollega by remember { mutableStateOf(false) }
     val collega = rememberCollegaDrive(m)
 
@@ -141,6 +141,12 @@ fun SezioneDrive(m: Model) {
                 m.nomeCartellaRef.ifEmpty { "Da scegliere (facoltativa)" },
                 icona = null,
             ) { sceltaCartella = 3 }
+            Spacer(Modifier.height(8.dp))
+            CampoScelta(
+                "Cartella di mamma e papà",
+                m.nomeCartellaGen.ifEmpty { "Da scegliere (facoltativa)" },
+                icona = null,
+            ) { sceltaCartella = 4 }
             Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedButton(onClick = { m.sincronizzaDrive(silenzioso = false, subito = true) }, enabled = !m.driveInSync && m.cartellaFoto != null) {
                     Text(if (m.driveInSync) "Sincronizzo…" else "Sincronizza ora")
@@ -164,7 +170,8 @@ fun SezioneDrive(m: Model) {
                     "se la elimini su Drive sparisce anche dall'app. Immagini e PDF della cartella delle ecografie " +
                     "vengono collegati all'ecografia dello stesso giorno, che l'app crea se non c'è ancora. " +
                     "Nella cartella dei referti ogni PDF diventa un referto, e le foto dello stesso giorno un referto solo. " +
-                    "I PDF si leggono solo dalle cartelle delle ecografie e dei referti.",
+                    "I PDF si leggono solo dalle cartelle delle ecografie e dei referti. " +
+                    "La cartella di mamma e papà riempie l'album «Mamma e papà» della sezione Foto.",
                 style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
             )
@@ -175,23 +182,28 @@ fun SezioneDrive(m: Model) {
         val quale = when (sceltaCartella) {
             2 -> "eco"
             3 -> "ref"
+            4 -> "gen"
             else -> "foto"
         }
         val attuale = when (quale) {
             "eco" -> m.cartellaEco
             "ref" -> m.cartellaRef
+            "gen" -> m.cartellaGen
             else -> m.cartellaFoto
         }
         ScegliCartellaDrive(
             titolo = when (quale) {
                 "eco" -> "Cartella delle ecografie"
                 "ref" -> "Cartella dei referti"
+                "gen" -> "Cartella di mamma e papà"
                 else -> "Cartella delle foto"
             },
             avviso = if (attuale != null) {
                 "Cambiando cartella, i file della cartella di prima escono dall'app (su Drive restano)."
             } else if (quale == "ref") {
                 "Scegli una cartella diversa da quelle delle foto e delle ecografie, anche nuova e vuota."
+            } else if (quale == "gen") {
+                "Scegli una cartella diversa dalle altre: le sue foto e i suoi video finiscono nell'album «Mamma e papà»."
             } else {
                 null
             },

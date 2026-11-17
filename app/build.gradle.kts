@@ -12,8 +12,8 @@ android {
         applicationId = "com.pancy.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.8"
+        versionCode = 11
+        versionName = "1.10"
     }
 
     // Chiave di firma fissa: così ogni nuova versione si installa sopra la precedente senza perdere i dati

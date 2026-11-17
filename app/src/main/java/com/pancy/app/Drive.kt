@@ -294,6 +294,37 @@ object Drive {
     fun cestina(ctx: Context, id: String) {
         chiama(ctx, "PATCH", "$API/files/$id?supportsAllDrives=true&fields=id", JSONObject().put("trashed", true))
     }
+
+    // ---------------- Backup dei dati ----------------
+
+    /** I file di backup dell'app su Drive (di solito uno), dal più recente. */
+    fun backups(ctx: Context): List<FileDrive> =
+        cerca(ctx, "appProperties has { key='pancyBackup' and value='1' } and trashed = false")
+            .sortedByDescending { salvatoDi(it) }
+
+    /** Quando è stato salvato il backup (millisecondi, dalla proprietà "pancySalvato"). */
+    fun salvatoDi(f: FileDrive): Long = f.props["pancySalvato"]?.toLongOrNull() ?: 0L
+
+    /**
+     * Salva il backup in "Il mio Drive" come file nuovo, poi elimina quelli vecchi
+     * (così, se qualcosa va storto a metà, resta sempre almeno un backup buono).
+     */
+    fun salvaBackup(ctx: Context, f: File, salvato: Long, vecchi: List<FileDrive>) {
+        carica(
+            ctx, f, Backup.NOME_SU_DRIVE, Backup.MIME, "root",
+            "Backup automatico dei dati dell'app Pancy (pesi, appuntamenti, ecografie, referti, impostazioni). " +
+                "Serve per recuperarli dopo una reinstallazione: non cancellarlo.",
+            mapOf("pancyBackup" to "1", "pancySalvato" to salvato.toString()),
+        )
+        for (v in vecchi) {
+            try {
+                chiama(ctx, "DELETE", "$API/files/${v.id}?supportsAllDrives=true")
+            } catch (e: ErroreDrive) {
+                if (e.serveConsenso) throw e
+                // resta un backup vecchio in più: si riprova la prossima volta
+            }
+        }
+    }
 }
 
 /** Risultato di una sincronizzazione, da applicare ai dati dell'app sul thread principale. */
@@ -305,7 +336,8 @@ class EsitoSync(
     val foto: List<FileDrive>,
     val eco: List<FileDrive>,
     val ref: List<FileDrive>,
-    /** Le cartelle lette in questa sincronizzazione ("foto", "eco", "ref"): solo lì un file mancante è stato eliminato. */
+    val gen: List<FileDrive>,
+    /** Le cartelle lette in questa sincronizzazione ("foto", "eco", "ref", "gen"): solo lì un file mancante è stato eliminato. */
     val elencate: Set<String>,
     /** Cartella in cui si trova ora ogni file già collegato ("foto"/"eco"/"ref"). */
     val cartelle: Map<String, String>,
@@ -401,16 +433,20 @@ object SincroniaDrive {
         fotoId: String,
         ecoId: String?,
         refId: String?,
+        genId: String?,
     ): EsitoSync {
         val dueCartelle = ecoId != null && ecoId != fotoId
         val conRef = refId != null && refId != fotoId && refId != ecoId
+        val conGen = genId != null && genId != fotoId && genId != ecoId && genId != refId
         fun idCartella(c: String): String = when {
             c == "eco" && dueCartelle && ecoId != null -> ecoId
             c == "ref" && conRef && refId != null -> refId
+            c == "gen" && conGen && genId != null -> genId
             else -> fotoId
         }
         /** Dove deve stare il file su Drive; null = resta solo sul telefono (la sua cartella non è stata scelta). */
         fun cartellaVoluta(m: Media): String? = when {
+            m.album != null -> if (conGen) "gen" else null
             m.referto != null -> if (conRef) "ref" else null
             m.pdf -> if (m.ecografia != null && dueCartelle) "eco" else null
             m.ecografia != null && dueCartelle -> "eco"
@@ -454,15 +490,18 @@ object SincroniaDrive {
         val foto = Drive.mediaIn(ctx, fotoId).filter { it.id !in daCestinare }
         val eco = if (dueCartelle && ecoId != null) Drive.mediaIn(ctx, ecoId, pdf = true).filter { it.id !in daCestinare } else emptyList()
         val ref = if (conRef && refId != null) Drive.mediaIn(ctx, refId, pdf = true).filter { it.id !in daCestinare } else emptyList()
+        val gen = if (conGen && genId != null) Drive.mediaIn(ctx, genId).filter { it.id !in daCestinare } else emptyList()
         val elencate = HashSet<String>()
         elencate.add("foto")
         if (dueCartelle) elencate.add("eco")
         if (conRef) elencate.add("ref")
+        if (conGen) elencate.add("gen")
         val dove = HashMap<String, String>()
         for (f in foto) dove[f.id] = "foto"
         for (f in eco) dove[f.id] = "eco"
         for (f in ref) dove[f.id] = "ref"
-        val tutti = foto + eco + ref
+        for (f in gen) dove[f.id] = "gen"
+        val tutti = foto + eco + ref + gen
         val perId = tutti.associateBy { it.id }
         val collegati = media.mapNotNull { it.driveId }.toHashSet()
         val perMd5 = HashMap<String, FileDrive>()
@@ -529,6 +568,6 @@ object SincroniaDrive {
                 errore(e)
             }
         }
-        return EsitoSync(caricati, cestinati, foto, eco, ref, elencate, cartelle, spostatiSuDrive, errori, primoErrore)
+        return EsitoSync(caricati, cestinati, foto, eco, ref, gen, elencate, cartelle, spostatiSuDrive, errori, primoErrore)
     }
 }

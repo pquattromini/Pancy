@@ -57,13 +57,14 @@ import kotlinx.coroutines.withContext
 
 /** Foto e video a schermo intero: si scorre di lato, doppio tocco o due dita per lo zoom. */
 @Composable
-fun VisoreScreen(m: Model, id: String, ecografia: String?, referto: String?) {
+fun VisoreScreen(m: Model, id: String, ecografia: String?, referto: String?, album: String? = null) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     // i PDF hanno il loro visore (DocumentoScreen)
     val lista = when {
         ecografia != null -> m.mediaDi(ecografia).filter { !it.pdf }
         referto != null -> m.fileDi(referto).filter { !it.pdf }
+        album != null -> m.album(album)
         else -> m.galleria
     }
     if (lista.isEmpty()) {

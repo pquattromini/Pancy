@@ -46,8 +46,10 @@ sealed interface Schermata {
     /** [id] null = nuovo appuntamento; [bozza] = valori già compilati (per esempio dal calendario degli esami). */
     data class Modifica(val id: String?, val bozza: Appuntamento? = null) : Schermata
     data object Impostazioni : Schermata
-    /** Foto o video a schermo intero; con [ecografia] o [referto] si scorrono solo le loro immagini. */
-    data class Visore(val id: String, val ecografia: String? = null, val referto: String? = null) : Schermata
+    /** Foto o video a schermo intero; con [ecografia], [referto] o [album] si scorrono solo le loro immagini. */
+    data class Visore(val id: String, val ecografia: String? = null, val referto: String? = null, val album: String? = null) : Schermata
+    /** Un album a parte della sezione Foto, per esempio quello di mamma e papà. */
+    data class Album(val nome: String) : Schermata
     /** Un PDF, pagina per pagina. */
     data class Documento(val id: String) : Schermata
     data class EcoDettaglio(val id: String) : Schermata
@@ -78,6 +80,8 @@ fun PancyApp() {
     }
     // "indietro" del telefono: torna alla schermata precedente, poi all'agenda, poi esce dall'app
     BackHandler(enabled = m.puoTornare) { m.indietro() }
+    // un backup più recente da recuperare (o una copia scelta da file)
+    DialogoBackup(m)
     when (val s = m.schermata) {
         is Schermata.Radice -> stati.SaveableStateProvider("radice-" + s.sezione.name) {
             when (s.sezione) {
@@ -92,7 +96,8 @@ fun PancyApp() {
         is Schermata.Dettaglio -> DettaglioScreen(m, s.id, snack)
         is Schermata.Modifica -> ModificaScreen(m, s.id, s.bozza, snack)
         Schermata.Impostazioni -> ImpostazioniScreen(m, snack)
-        is Schermata.Visore -> VisoreScreen(m, s.id, s.ecografia, s.referto)
+        is Schermata.Visore -> VisoreScreen(m, s.id, s.ecografia, s.referto, s.album)
+        is Schermata.Album -> AlbumScreen(m, s.nome, snack)
         is Schermata.Documento -> DocumentoScreen(m, s.id, snack)
         is Schermata.EcoDettaglio -> EcografiaScreen(m, s.id, snack)
         is Schermata.EcoModifica -> EcoModificaScreen(m, s.id, s.daAppuntamento, snack)

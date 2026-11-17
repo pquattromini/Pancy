@@ -8,7 +8,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -144,6 +146,11 @@ class Model private constructor(private val ctx: Context) {
         private set
     var nomeCartellaRef by mutableStateOf(prefs.getString("driveRefNome", null) ?: "")
         private set
+    /** Cartella di Drive per le foto di mamma e papà (facoltativa: senza, restano solo sul telefono). */
+    var cartellaGen by mutableStateOf(prefs.getString("driveGen", null))
+        private set
+    var nomeCartellaGen by mutableStateOf(prefs.getString("driveGenNome", null) ?: "")
+        private set
     var driveInSync by mutableStateOf(false)
         private set
     /** Quando è finita l'ultima sincronizzazione riuscita (millisecondi, 0 = mai). */
@@ -167,6 +174,29 @@ class Model private constructor(private val ctx: Context) {
     /** Quante copie di foto e video sono in corso (più di 0 = mostra "sto copiando"). */
     var importazioni by mutableIntStateOf(0)
         private set
+
+    /** Quando è stato salvato l'ultimo backup su Google Drive (millisecondi, 0 = mai). */
+    var backupUltimo by mutableStateOf(prefs.getLong("backupUltimo", 0L))
+        private set
+    var backupInCorso by mutableStateOf(false)
+        private set
+    /** Un backup da ripristinare o no: lo decide l'utente nella finestra che compare (vedi [PancyApp]). */
+    var backupDaDecidere by mutableStateOf<InfoBackup?>(null)
+        private set
+    /** Il momento del backup che questo telefono ha scritto o ripristinato per ultimo: uno più recente su Drive viene da altrove. */
+    private var backupNoto = prefs.getLong("backupNoto", 0L)
+    private var lavoroBackup: Job? = null
+    private var ripristinando = false
+    private var backupControllato = false
+
+    /** Ogni impostazione cambiata finisce nel backup (tranne quelle solo di questo telefono). */
+    private val ascoltoPrefs = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, k ->
+        if (k != null && k !in Backup.PREF_LOCALI) segnaModifica()
+    }
+
+    init {
+        prefs.registerOnSharedPreferenceChangeListener(ascoltoPrefs)
+    }
 
     // ---------------- Navigazione ----------------
     // Una pila di schermate: la prima è sempre la sezione aperta, "indietro" toglie l'ultima.
@@ -484,8 +514,11 @@ class Model private constructor(private val ctx: Context) {
         driveProblema = null
         driveServeConsenso = false
         prefs.edit().putBoolean("driveCollegato", true).apply()
-        if (cartellaFoto != null) sincronizzaDrive(silenzioso = false, subito = true)
-        else messaggio = "Google Drive collegato: ora scegli le cartelle."
+        // prima guardo se c'è un backup da recuperare (dopo una reinstallazione porta anche le cartelle scelte)
+        controllaBackup(forza = true) {
+            if (cartellaFoto != null) sincronizzaDrive(silenzioso = false, subito = true)
+            else messaggio = "Google Drive collegato: ora scegli le cartelle."
+        }
     }
 
     /** Smette di sincronizzare. Le foto restano nell'app e su Drive. */
@@ -497,9 +530,25 @@ class Model private constructor(private val ctx: Context) {
         prefs.edit().putBoolean("driveCollegato", false).apply()
     }
 
-    /** Sceglie la cartella di Drive per [quale] ("foto", "eco" = ecografie, "ref" = referti) e sincronizza. */
+    /**
+     * Sceglie la cartella di Drive per [quale] ("foto", "eco" = ecografie, "ref" = referti, "gen" = mamma e papà)
+     * e sincronizza.
+     */
     fun impostaCartellaDrive(quale: String, id: String, nome: String) {
+        if (quale != "gen" && id == cartellaGen) {
+            messaggio = "È già la cartella di mamma e papà: scegline un'altra."
+            return
+        }
         when (quale) {
+            "gen" -> {
+                if (id == cartellaFoto || id == cartellaEco || id == cartellaRef) {
+                    messaggio = "Per mamma e papà scegli una cartella diversa da quelle di foto, ecografie e referti."
+                    return
+                }
+                cartellaGen = id
+                nomeCartellaGen = nome
+                prefs.edit().putString("driveGen", id).putString("driveGenNome", nome).apply()
+            }
             "eco" -> {
                 if (id == cartellaRef) {
                     messaggio = "È già la cartella dei referti: per le ecografie scegline un'altra."
@@ -547,6 +596,7 @@ class Model private constructor(private val ctx: Context) {
         ultimaSyncAuto = adesso
         val ecoId = cartellaEco
         val refId = cartellaRef
+        val genId = cartellaGen
         val istantanea = media
         val ecos = ecografie
         val refs = referti
@@ -555,7 +605,7 @@ class Model private constructor(private val ctx: Context) {
         scope.launch {
             try {
                 val esito = withContext(Dispatchers.IO) {
-                    SincroniaDrive.esegui(ctx, istantanea, ecos, refs, cestino, fotoId, ecoId, refId)
+                    SincroniaDrive.esegui(ctx, istantanea, ecos, refs, cestino, fotoId, ecoId, refId, genId)
                 }
                 applicaSync(esito, silenzioso)
                 driveProblema = null
@@ -634,6 +684,7 @@ class Model private constructor(private val ctx: Context) {
         for (f in es.foto) suDrive[f.id] = Pair(f, "foto")
         for (f in es.eco) suDrive[f.id] = Pair(f, "eco")
         for (f in es.ref) suDrive[f.id] = Pair(f, "ref")
+        for (f in es.gen) suDrive[f.id] = Pair(f, "gen")
         val appenaCaricati = es.caricati.values.map { it.first }.toHashSet()
 
         var tolti = 0
@@ -668,11 +719,15 @@ class Model private constructor(private val ctx: Context) {
                     // spostato a mano su Drive in un'altra cartella: vince Drive
                     when (cart) {
                         "eco" -> m0.copy(
-                            cartellaDrive = cart, referto = null,
+                            cartellaDrive = cart, referto = null, album = null,
                             ecografia = m0.ecografia ?: ecografiaPer(dataEco(trovato.first) ?: m0.data),
                         )
-                        "ref" -> m0.copy(cartellaDrive = cart, ecografia = null, referto = m0.referto ?: refertoPer(trovato.first, m0.data))
-                        else -> m0.copy(cartellaDrive = cart, ecografia = null, referto = null)
+                        "ref" -> m0.copy(
+                            cartellaDrive = cart, ecografia = null, album = null,
+                            referto = m0.referto ?: refertoPer(trovato.first, m0.data),
+                        )
+                        "gen" -> m0.copy(cartellaDrive = cart, ecografia = null, referto = null, album = ALBUM_GENITORI)
+                        else -> m0.copy(cartellaDrive = cart, ecografia = null, referto = null, album = null)
                     }
                 } else {
                     m0.copy(cartellaDrive = cart)
@@ -695,6 +750,7 @@ class Model private constructor(private val ctx: Context) {
             when (cart) {
                 "eco" -> ecografia = ecografiaPer(dataEco(f) ?: data)
                 "ref" -> referto = refertoPer(f, data)
+                "gen" -> {}
                 else -> dataEco(f)?.let { ecografia = ecografiaPer(it) }
             }
             lista.add(
@@ -707,6 +763,7 @@ class Model private constructor(private val ctx: Context) {
                     didascalia = if (pdf) f.descrizione.ifBlank { NomeFile.titolo(f.nome) } else f.descrizione,
                     ecografia = ecografia,
                     referto = referto,
+                    album = if (cart == "gen") ALBUM_GENITORI else null,
                     aggiunto = SincroniaDrive.creatoMs(f),
                     driveId = id,
                     cartellaDrive = cart,
@@ -751,6 +808,249 @@ class Model private constructor(private val ctx: Context) {
             !silenzioso -> "Google Drive è sincronizzato."
             else -> messaggio
         }
+    }
+
+    // ---------------- Backup dei dati ----------------
+
+    /** Dopo ogni modifica, il backup su Drive parte qualche secondo dopo (le modifiche ravvicinate vanno in un backup solo). */
+    private fun segnaModifica() {
+        if (ripristinando) return
+        prefs.edit().putLong("ultimaModifica", System.currentTimeMillis()).apply()
+        if (!driveCollegato) return
+        lavoroBackup?.cancel()
+        lavoroBackup = scope.launch {
+            delay(8_000)
+            backupSuDrive(silenzioso = true)
+        }
+    }
+
+    /** L'app va in secondo piano: se c'è un backup in attesa, lo faccio subito. */
+    fun backupInSospeso() {
+        val l = lavoroBackup ?: return
+        if (!l.isActive) return
+        l.cancel()
+        backupSuDrive(silenzioso = true)
+    }
+
+    private fun versioneApp(): String = try {
+        ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName ?: ""
+    } catch (e: Exception) {
+        ""
+    }
+
+    /** Il backup di adesso, come JSON. */
+    private fun componiBackup(salvato: Long): JSONObject = Backup.componi(ctx.filesDir, prefs.all, salvato, versioneApp())
+
+    private fun localeVuoto(): Boolean =
+        appuntamenti.isEmpty() && ecografie.isEmpty() && referti.isEmpty() && pesi.isEmpty() &&
+            consigli.isEmpty() && conversazioni.isEmpty() && dpp == null
+
+    /**
+     * Salva il backup su Drive. Se su Drive ce n'è uno più recente di quello che conosce questo telefono
+     * (per esempio dopo una reinstallazione), non lo sovrascrive: lo recupera se il telefono è vuoto, altrimenti chiede.
+     */
+    fun backupSuDrive(silenzioso: Boolean) {
+        if (!driveCollegato || backupInCorso || backupDaDecidere != null) return
+        backupInCorso = true
+        scope.launch {
+            try {
+                val noto = backupNoto
+                val salvato = System.currentTimeMillis()
+                val esito = withContext(Dispatchers.IO) {
+                    val esistenti = Drive.backups(ctx)
+                    val ultimo = esistenti.firstOrNull()
+                    // uno più recente, scritto da un'altra installazione: prima si decide che farne
+                    val nuovo = if (ultimo != null && Drive.salvatoDi(ultimo) > noto) scaricaBackup(ultimo) else null
+                    if (nuovo == null) {
+                        val f = File(ctx.cacheDir, "backup.json")
+                        f.writeText(componiBackup(salvato).toString())
+                        Drive.salvaBackup(ctx, f, salvato, esistenti)
+                        f.delete()
+                    }
+                    nuovo
+                }
+                backupInCorso = false
+                if (esito != null) {
+                    decidiBackup(esito)
+                    return@launch
+                }
+                backupNoto = salvato
+                backupUltimo = salvato
+                prefs.edit().putLong("backupNoto", salvato).putLong("backupUltimo", salvato).apply()
+                if (!silenzioso) messaggio = "Backup salvato su Google Drive."
+            } catch (e: ErroreDrive) {
+                backupInCorso = false
+                if (!silenzioso) messaggio = "Backup non riuscito: " + e.message
+            } catch (e: Exception) {
+                backupInCorso = false
+                if (!silenzioso) messaggio = "Backup non riuscito: controlla la connessione."
+            }
+        }
+    }
+
+    /** Scarica e legge un backup di Drive (bloccante). Null se il file è rovinato: verrà sostituito. */
+    private fun scaricaBackup(f: FileDrive): InfoBackup? {
+        val tmp = File(ctx.cacheDir, "backup-scaricato.json")
+        Drive.scarica(ctx, f.id, tmp)
+        val b = try { Backup.leggi(tmp.readText()) } catch (e: IllegalArgumentException) { null } finally { tmp.delete() }
+        b ?: return null
+        return InfoBackup(Backup.salvato(b).takeIf { it > 0 } ?: Drive.salvatoDi(f), Backup.descrivi(b), b, daFile = false)
+    }
+
+    /** Un backup più recente: se il telefono è vuoto lo recupero subito, altrimenti chiedo. */
+    private fun decidiBackup(info: InfoBackup) {
+        if (localeVuoto()) ripristinaBackup(info) else backupDaDecidere = info
+    }
+
+    /**
+     * Una volta per avvio (e quando si collega Drive): guarda se su Drive c'è un backup più recente;
+     * poi esegue [poi] (di solito la sincronizzazione delle foto).
+     */
+    fun controllaBackup(forza: Boolean = false, poi: () -> Unit = {}) {
+        if (!driveCollegato || (backupControllato && !forza)) {
+            poi()
+            return
+        }
+        backupControllato = true
+        val noto = backupNoto
+        scope.launch {
+            val info = try {
+                withContext(Dispatchers.IO) {
+                    val ultimo = Drive.backups(ctx).firstOrNull()
+                    if (ultimo != null && Drive.salvatoDi(ultimo) > noto) scaricaBackup(ultimo) else null
+                }
+            } catch (e: Exception) {
+                null
+            }
+            if (info != null) {
+                if (localeVuoto()) {
+                    // reinstallazione: recupero tutto, poi la sincronizzazione parte con le cartelle ritrovate
+                    ripristinaBackup(info)
+                    return@launch
+                }
+                backupDaDecidere = info
+            } else if (backupUltimo == 0L && !localeVuoto()) {
+                // primo backup di questo telefono
+                backupSuDrive(silenzioso = true)
+            }
+            poi()
+        }
+    }
+
+    /** Recupera il backup: i suoi dati, uniti a quelli del telefono, e le impostazioni. Poi sincronizza. */
+    fun ripristinaBackup(info: InfoBackup) {
+        backupDaDecidere = null
+        ripristinando = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    Backup.ripristinaFile(ctx.filesDir, info.dati)
+                    val ed = prefs.edit()
+                    for ((k, v) in Backup.impostazioni(info.dati)) {
+                        @Suppress("UNCHECKED_CAST")
+                        when (v) {
+                            is String -> ed.putString(k, v)
+                            is Boolean -> ed.putBoolean(k, v)
+                            is Int -> ed.putInt(k, v)
+                            is Long -> ed.putLong(k, v)
+                            is Float -> ed.putFloat(k, v)
+                            is Set<*> -> ed.putStringSet(k, v as Set<String>)
+                        }
+                    }
+                    ed.putLong("backupNoto", info.salvato)
+                    ed.commit()
+                }
+                ricarica()
+                backupNoto = info.salvato
+                messaggio = "Ho recuperato i dati dal backup " + quandoBackup(info.salvato) + "."
+            } catch (e: Exception) {
+                messaggio = "Non sono riuscito a recuperare il backup: " + (e.message ?: e.javaClass.simpleName)
+            } finally {
+                ripristinando = false
+            }
+            sincronizzaDrive(silenzioso = true, subito = true)
+            // il backup su Drive ora deve contenere anche quello che c'era solo sul telefono
+            segnaModifica()
+        }
+    }
+
+    /** L'utente tiene i dati del telefono: il backup su Drive verrà sostituito. */
+    fun teniDatiDelTelefono() {
+        val info = backupDaDecidere ?: return
+        backupDaDecidere = null
+        if (info.daFile) return
+        backupNoto = info.salvato
+        prefs.edit().putLong("backupNoto", info.salvato).apply()
+        backupSuDrive(silenzioso = false)
+    }
+
+    /** "del 17 novembre alle 14:30" */
+    fun quandoBackup(ms: Long): String {
+        val t = java.time.Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault())
+        return "del " + dataMedia(t.toLocalDate()) + " alle " + orario(t.toLocalTime())
+    }
+
+    /** Salva una copia del backup in un file scelto dall'utente (per esempio nella memoria del telefono). */
+    fun esportaBackup(uri: Uri) {
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                try {
+                    val testo = componiBackup(System.currentTimeMillis()).toString(2)
+                    ctx.contentResolver.openOutputStream(uri, "wt")?.use { it.write(testo.toByteArray(Charsets.UTF_8)) } != null
+                } catch (e: Exception) {
+                    false
+                }
+            }
+            messaggio = if (ok) "Copia dei dati salvata." else "Non sono riuscito a salvare la copia."
+        }
+    }
+
+    /** Legge un backup da un file: poi l'utente conferma il ripristino nella finestra che compare. */
+    fun leggiBackupDaFile(uri: Uri) {
+        scope.launch {
+            val esito = withContext(Dispatchers.IO) {
+                try {
+                    val testo = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().toString(Charsets.UTF_8) }
+                        ?: throw IllegalArgumentException("Non riesco ad aprire il file.")
+                    val b = Backup.leggi(testo)
+                    Result.success(InfoBackup(Backup.salvato(b), Backup.descrivi(b), b, daFile = true))
+                } catch (e: Exception) {
+                    Result.failure(e)
+                }
+            }
+            val info = esito.getOrNull()
+            if (info == null) messaggio = esito.exceptionOrNull()?.message ?: "Il file non è un backup di Pancy." else backupDaDecidere = info
+        }
+    }
+
+    /** Rilegge dati e impostazioni dai file (dopo un ripristino). */
+    private fun ricarica() {
+        appuntamenti = Appuntamento.ordina(Archivio.carica(ctx, F_APPUNTAMENTI, "appuntamenti") { Appuntamento.daJson(it) })
+        ecografie = Ecografia.ordina(Archivio.carica(ctx, F_ECOGRAFIE, "ecografie") { Ecografia.daJson(it) })
+        media = Media.ordina(Archivio.carica(ctx, F_MEDIA, "media") { Media.daJson(it) })
+        referti = Referto.ordina(Archivio.carica(ctx, F_REFERTI, "referti") { Referto.daJson(it) })
+        pesi = Peso.ordina(Archivio.carica(ctx, F_PESI, "pesi") { Peso.daJson(it) })
+        consigli = Consiglio.ordina(Archivio.carica(ctx, F_CONSIGLI, "consigli") { Consiglio.daJson(it) })
+        conversazioni = Conversazione.ordina(Archivio.carica(ctx, F_CONVERSAZIONI, "conversazioni") { Conversazione.daJson(it) })
+        modelloIA = prefs.getString("modelloIA", null) ?: MODELLO_PREDEFINITO
+        leggiRisposte = prefs.getBoolean("leggiRisposte", true)
+        dpp = prefs.getString("dpp", null)?.let { try { LocalDate.parse(it) } catch (e: Exception) { null } }
+        pesoIniziale = prefs.getString("pesoIniziale", null)?.toDoubleOrNull()
+        calendario = prefs.getLong("calId", -1L).takeIf { it >= 0 }
+        promemoria = prefs.getInt("promemoria", 24 * 60)
+        importaDa = prefs.getString("importaDa", null).orEmpty().split(",").mapNotNull { it.trim().toLongOrNull() }.toSet()
+        importaFiltro = prefs.getBoolean("importaFiltro", true)
+        paroleImport = prefs.getString("paroleImport", null) ?: PAROLE_PREDEFINITE
+        cartellaFoto = prefs.getString("driveFoto", null)
+        nomeCartellaFoto = prefs.getString("driveFotoNome", null) ?: ""
+        cartellaEco = prefs.getString("driveEco", null)
+        nomeCartellaEco = prefs.getString("driveEcoNome", null) ?: ""
+        cartellaRef = prefs.getString("driveRef", null)
+        nomeCartellaRef = prefs.getString("driveRefNome", null) ?: ""
+        cartellaGen = prefs.getString("driveGen", null)
+        nomeCartellaGen = prefs.getString("driveGenNome", null) ?: ""
+        daCestinare = prefs.getStringSet("driveDaCestinare", null)?.toSet() ?: emptySet()
+        ignorati = prefs.getStringSet("importIgnorati", null)?.toSet() ?: emptySet()
     }
 
     // ---------------- Ecografie ----------------
@@ -820,8 +1120,11 @@ class Model private constructor(private val ctx: Context) {
 
     // ---------------- Foto, video e PDF ----------------
 
-    /** Foto e video della sezione Foto: tutto tranne PDF e file dei referti. */
-    val galleria: List<Media> get() = media.filter { !it.pdf && it.referto == null }
+    /** Foto e video della sezione Foto: tutto tranne PDF, file dei referti e album a parte (mamma e papà). */
+    val galleria: List<Media> get() = media.filter { !it.pdf && it.referto == null && it.album == null }
+
+    /** Foto e video di un album a parte, per esempio [ALBUM_GENITORI]. */
+    fun album(nome: String): List<Media> = media.filter { it.album == nome }
 
     fun mediaDi(ecografia: String): List<Media> = media.filter { it.ecografia == ecografia }
 
@@ -838,13 +1141,15 @@ class Model private constructor(private val ctx: Context) {
 
     /**
      * Copia nell'app le foto e i video scelti dalla galleria, o i PDF scelti tra i file (in sottofondo: possono essere grandi).
-     * Con [ecografia] o [referto] li collega a quell'ecografia o a quel referto.
+     * Con [ecografia], [referto] o [album] li collega a quell'ecografia, a quel referto o a quell'album.
      */
-    fun importa(uris: List<Uri>, ecografia: String?, referto: String? = null) {
+    fun importa(uris: List<Uri>, ecografia: String?, referto: String? = null, album: String? = null) {
         if (uris.isEmpty()) return
         importazioni += 1
         scope.launch {
-            val nuovi = withContext(Dispatchers.IO) { uris.mapNotNull { Galleria.copia(ctx, it, ecografia, referto) } }
+            val nuovi = withContext(Dispatchers.IO) {
+                uris.mapNotNull { Galleria.copia(ctx, it, ecografia, referto)?.copy(album = album) }
+            }
             aggiungiMedia(nuovi.map { conDataGiusta(it) })
             importazioni -= 1
             sincronizzaDrive(silenzioso = true, subito = true)
@@ -859,9 +1164,10 @@ class Model private constructor(private val ctx: Context) {
     }
 
     /** Dopo la fotocamera: tiene il file se è stato scritto davvero, altrimenti lo cancella. */
-    fun dopoScatto(f: File, video: Boolean, ecografia: String?, referto: String? = null) {
+    fun dopoScatto(f: File, video: Boolean, ecografia: String?, referto: String? = null, album: String? = null) {
         if (f.exists() && f.length() > 0) {
-            aggiungiMedia(listOf(conDataGiusta(Media(file = f.name, video = video, data = LocalDate.now(), ecografia = ecografia, referto = referto))))
+            val nuovo = Media(file = f.name, video = video, data = LocalDate.now(), ecografia = ecografia, referto = referto, album = album)
+            aggiungiMedia(listOf(conDataGiusta(nuovo)))
             messaggio = if (video) "Video aggiunto." else "Foto aggiunta."
             sincronizzaDrive(silenzioso = true, subito = true)
         } else {
@@ -1186,9 +1492,14 @@ class Model private constructor(private val ctx: Context) {
             }
             "foto" -> {
                 if (foto.isEmpty()) return null
-                fotoDallaChat(foto, ecografia = null, referto = null, data = LocalDate.parse(c.getString("data")), didascalia = c.optString("didascalia"))
-                messaggio = if (foto.size == 1) "Foto aggiunta alla sezione Foto." else "${foto.size} foto aggiunte alla sezione Foto."
-                return "foto"
+                val album = c.optString("album").takeIf { it.isNotEmpty() }
+                fotoDallaChat(
+                    foto, ecografia = null, referto = null, data = LocalDate.parse(c.getString("data")),
+                    didascalia = c.optString("didascalia"), album = album,
+                )
+                val dove = if (album != null) "all'album Mamma e papà" else "alla sezione Foto"
+                messaggio = if (foto.size == 1) "Foto aggiunta $dove." else "${foto.size} foto aggiunte $dove."
+                return album ?: "foto"
             }
             "impostazioni" -> {
                 c.optString("data_parto").takeIf { it.isNotEmpty() }?.let { impostaDpp(LocalDate.parse(it)) }
@@ -1201,7 +1512,9 @@ class Model private constructor(private val ctx: Context) {
     }
 
     /** Copia nell'app (sezione Foto, ecografia o referto) le foto allegate alla chat. */
-    private fun fotoDallaChat(nomi: List<String>, ecografia: String?, referto: String?, data: LocalDate, didascalia: String) {
+    private fun fotoDallaChat(
+        nomi: List<String>, ecografia: String?, referto: String?, data: LocalDate, didascalia: String, album: String? = null,
+    ) {
         if (nomi.isEmpty()) return
         importazioni += 1
         scope.launch {
@@ -1212,7 +1525,10 @@ class Model private constructor(private val ctx: Context) {
                     val dest = Galleria.nuovoFile(ctx, "jpg")
                     try {
                         src.copyTo(dest, overwrite = true)
-                        Media(file = dest.name, video = false, data = data, didascalia = didascalia, ecografia = ecografia, referto = referto)
+                        Media(
+                            file = dest.name, video = false, data = data, didascalia = didascalia,
+                            ecografia = ecografia, referto = referto, album = album,
+                        )
                     } catch (e: Exception) {
                         dest.delete()
                         null
@@ -1260,13 +1576,35 @@ class Model private constructor(private val ctx: Context) {
 
     // ---------------- Salvataggio ----------------
 
-    private fun salvaAppuntamenti() = Archivio.salva(ctx, F_APPUNTAMENTI, "appuntamenti", appuntamenti) { it.toJson() }
-    private fun salvaEcografie() = Archivio.salva(ctx, F_ECOGRAFIE, "ecografie", ecografie) { it.toJson() }
-    private fun salvaMedia() = Archivio.salva(ctx, F_MEDIA, "media", media) { it.toJson() }
-    private fun salvaReferti() = Archivio.salva(ctx, F_REFERTI, "referti", referti) { it.toJson() }
-    private fun salvaPesi() = Archivio.salva(ctx, F_PESI, "pesi", pesi) { it.toJson() }
-    private fun salvaConsigli() = Archivio.salva(ctx, F_CONSIGLI, "consigli", consigli) { it.toJson() }
-    private fun salvaConversazioni() = Archivio.salva(ctx, F_CONVERSAZIONI, "conversazioni", conversazioni) { it.toJson() }
+    // ogni salvataggio fa partire (poco dopo) il backup su Drive
+    private fun salvaAppuntamenti() {
+        Archivio.salva(ctx, F_APPUNTAMENTI, "appuntamenti", appuntamenti) { it.toJson() }
+        segnaModifica()
+    }
+    private fun salvaEcografie() {
+        Archivio.salva(ctx, F_ECOGRAFIE, "ecografie", ecografie) { it.toJson() }
+        segnaModifica()
+    }
+    private fun salvaMedia() {
+        Archivio.salva(ctx, F_MEDIA, "media", media) { it.toJson() }
+        segnaModifica()
+    }
+    private fun salvaReferti() {
+        Archivio.salva(ctx, F_REFERTI, "referti", referti) { it.toJson() }
+        segnaModifica()
+    }
+    private fun salvaPesi() {
+        Archivio.salva(ctx, F_PESI, "pesi", pesi) { it.toJson() }
+        segnaModifica()
+    }
+    private fun salvaConsigli() {
+        Archivio.salva(ctx, F_CONSIGLI, "consigli", consigli) { it.toJson() }
+        segnaModifica()
+    }
+    private fun salvaConversazioni() {
+        Archivio.salva(ctx, F_CONVERSAZIONI, "conversazioni", conversazioni) { it.toJson() }
+        segnaModifica()
+    }
 
     companion object {
         @Volatile private var istanza: Model? = null

@@ -242,6 +242,9 @@ fun ImpostazioniScreen(m: Model, snack: SnackbarHostState) {
             // ---- Google Drive ----
             SezioneDrive(m)
 
+            // ---- Backup ----
+            SezioneBackup(m)
+
             // ---- Chiedi all'IA ----
             SezioneIA(m)
 
@@ -255,9 +258,8 @@ fun ImpostazioniScreen(m: Model, snack: SnackbarHostState) {
                 style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
             )
             Text(
-                "Appuntamenti, ecografie, referti, pesi, consigli e conversazioni rientrano nel backup automatico di Android (se è attivo). " +
-                    "Foto, video, PDF e foto allegate alla chat invece occupano troppo spazio per quel backup: " +
-                    "con Google Drive collegato tornano da Drive, altrimenti restano solo su questo telefono.",
+                "Con Google Drive collegato, dati e impostazioni sono nel backup qui sopra, e foto, video e PDF tornano dalle loro cartelle. " +
+                    "Le foto allegate alla chat e i messaggi vocali restano solo su questo telefono.",
                 style = MaterialTheme.typography.bodyMedium, color = cs.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp, bottom = 32.dp),
             )

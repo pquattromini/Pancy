@@ -556,6 +556,8 @@ object Assistente {
 
 object Fascicolo {
     private val ISO = DateTimeFormatter.ISO_LOCAL_DATE
+    /** Foto di mamma e papà elencate all'IA, al massimo (le più recenti). */
+    private const val MAX_ALBUM = 60
 
     private const val REGOLE = """Sei l'assistente dell'app Pancy, che una coppia usa per seguire la gravidanza. Chi scrive può essere la futura mamma o il suo compagno.
 
@@ -700,6 +702,21 @@ Limiti importanti:
                     codice(med), if (med.video) "video" else "foto", ISO.format(med.data), sett(m, med.data),
                     med.didascalia.takeIf { it.isNotBlank() }?.let { "\"$it\"" },
                     eco?.let { "dall'ecografia del ${ISO.format(it.data)}" },
+                ),
+            )
+        }
+        appendLine()
+
+        // l'album di mamma e papà può essere grande: solo le più recenti, con il totale
+        val genitori = m.album(ALBUM_GENITORI)
+        appendLine("FOTO E VIDEO DI MAMMA E PAPÀ (${genitori.size}, album a parte non legato alla gravidanza)")
+        if (genitori.isEmpty()) appendLine("- Nessuna.")
+        if (genitori.size > MAX_ALBUM) appendLine("- Elenco limitato alle $MAX_ALBUM più recenti.")
+        for (med in genitori.take(MAX_ALBUM)) {
+            appendLine(
+                riga(
+                    codice(med), if (med.video) "video" else "foto", ISO.format(med.data),
+                    med.didascalia.takeIf { it.isNotBlank() }?.let { "\"$it\"" },
                 ),
             )
         }

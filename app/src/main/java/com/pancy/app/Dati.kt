@@ -9,6 +9,9 @@ import java.util.UUID
 
 const val MIME_PDF = "application/pdf"
 
+/** Album delle foto e dei video di mamma e papà (non legati alla gravidanza). */
+const val ALBUM_GENITORI = "genitori"
+
 /**
  * Un evento letto dal calendario del telefono, da importare come appuntamento.
  * [chiave] lo identifica: "calendario:evento", con "@data" in più per gli eventi che si ripetono.
@@ -97,9 +100,10 @@ data class Ecografia(
 /**
  * Una foto, un video o un documento PDF. Il file sta nella cartella "media" dell'app ([file] è il nome);
  * per quelli arrivati da Google Drive il file si scarica solo quando serve.
- * [ecografia] e [referto] sono l'ecografia o il referto a cui appartiene, se c'è.
+ * [ecografia] e [referto] sono l'ecografia o il referto a cui appartiene, se c'è; [album] è l'album fuori dalla
+ * gravidanza ([ALBUM_GENITORI]), se c'è.
  * [driveId] è il file corrispondente su Google Drive; [cartellaDrive] dice in quale cartella era all'ultima
- * sincronizzazione ("foto", "eco" o "ref"), per capire se è stato spostato a mano su Drive.
+ * sincronizzazione ("foto", "eco", "ref" o "gen"), per capire se è stato spostato a mano su Drive.
  */
 data class Media(
     val id: String = UUID.randomUUID().toString(),
@@ -113,6 +117,7 @@ data class Media(
     val cartellaDrive: String? = null,
     val pdf: Boolean = false,
     val referto: String? = null,
+    val album: String? = null,
 ) {
     fun toJson(): JSONObject {
         val o = JSONObject()
@@ -125,6 +130,7 @@ data class Media(
         if (pdf) o.put("pdf", true)
         if (ecografia != null) o.put("ecografia", ecografia)
         if (referto != null) o.put("referto", referto)
+        if (album != null) o.put("album", album)
         if (driveId != null) o.put("driveId", driveId)
         if (cartellaDrive != null) o.put("cartellaDrive", cartellaDrive)
         return o
@@ -143,6 +149,7 @@ data class Media(
             cartellaDrive = o.optString("cartellaDrive").takeIf { it.isNotEmpty() },
             pdf = o.optBoolean("pdf"),
             referto = o.optString("referto").takeIf { it.isNotEmpty() },
+            album = o.optString("album").takeIf { it.isNotEmpty() },
         )
 
         /** Dalla più recente. */

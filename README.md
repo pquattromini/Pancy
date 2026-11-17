@@ -1,5 +1,5 @@
 # Pancy
-App Android per seguire la gravidanza. Versione 1.8: sei sezioni nella barra in basso, "Chiedi all'IA", calendario e Google Drive (anche per i PDF).
+App Android per seguire la gravidanza. Versione 1.10: sei sezioni nella barra in basso, "Chiedi all'IA", calendario e Google Drive (anche per i PDF).
 
 ## Sezioni
 | Sezione | Cosa fa |
@@ -7,7 +7,7 @@ App Android per seguire la gravidanza. Versione 1.8: sei sezioni nella barra in 
 | **Agenda** | Appuntamenti in programma e passati, con tipo, data, ora, luogo, medico, note ed esito. Copia facoltativa nel calendario del telefono con promemoria, e importazione facoltativa dal calendario (anche da quello condiviso dalla compagna). |
 | **Ecografie** | Per ogni ecografia: misure del referto (peso stimato, battito, CRL, NT, BPD, HC, AC, FL), note, immagini e referto in PDF. Le ecografie in agenda già fatte compaiono come "da completare". |
 | **Referti** | Esami del sangue e delle urine, test prenatali, tamponi, referti di visita, impegnative. Per ognuno: tipo, data, laboratorio o medico, esito in breve, note, PDF e foto del foglio. Gli esami in agenda già fatti compaiono come "da completare", e dall'appuntamento si aggiunge il referto. I PDF si leggono nell'app pagina per pagina (tocca per ingrandire) o si aprono con un'altra app. |
-| **Foto** | Foto e video dalla galleria o dalla fotocamera, divisi per settimana di gravidanza. Schermo intero con zoom, video, didascalia, condivisione. |
+| **Foto** | Foto e video dalla galleria o dalla fotocamera, divisi per settimana di gravidanza. Schermo intero con zoom, video, didascalia, condivisione. In cima, il pulsante **Mamma e papà** apre un album a parte con le foto e i video dei genitori non legati alla gravidanza, divisi per mese. |
 | **Storico** | Peso della mamma (inserito a mano, con grafico e aumento dall'inizio) e peso stimato del bambino (preso dalle ecografie). |
 | **Chiedi all'IA** | Pulsante "IA" in alto in ogni sezione. Chat con un modello OpenAI che riceve a ogni domanda tutti i dati dell'app (il "fascicolo") e può chiedere di vedere foto e PDF. Si possono allegare foto (per esempio un referto o la bilancia) e mandare messaggi vocali; le risposte si possono ascoltare. L'IA può proporre modifiche ai dati, che si salvano solo toccando «Salva». Conversazioni salvate. |
 | **Consigli** | Cosa fare in questo periodo, calendario degli esami gratuiti (LEA 2017) collegato all'agenda, vaccini, alimentazione, quando chiamare subito, fonti ISS. Più i consigli ricevuti da medico e ostetrica. |
@@ -24,8 +24,9 @@ La data presunta del parto (in Impostazioni) fa comparire ovunque la settimana d
   - Gli eventi creati dall'app non si importano, e gli appuntamenti importati non si ricopiano.
 
 ## Google Drive
-Foto, video, immagini e PDF si sincronizzano nei due sensi con tre cartelle di Drive: Foto, Ecografie e Referti (le ultime due facoltative).
+Foto, video, immagini e PDF si sincronizzano nei due sensi con quattro cartelle di Drive: Foto, Ecografie, Referti e Mamma e papà (le ultime tre facoltative).
 - **Foto**: solo foto e video.
+- **Mamma e papà**: foto e video dell'album a parte (`album = "genitori"` in `media.json`, cartella `"gen"` nella sincronizzazione). Senza questa cartella, l'album resta solo sul telefono.
 - **Ecografie**: immagini e PDF, collegati all'ecografia dello stesso giorno.
 - **Referti**: PDF e foto. Ogni PDF nuovo diventa un referto (titolo e tipo presi dal nome del file, per esempio `2026-10-03 esami sangue.pdf` → "Esami sangue", tipo Esami del sangue); le foto nuove dello stesso giorno diventano un referto solo. Se in agenda quel giorno c'è un appuntamento di tipo Esami, il referto si collega lì.
 - Senza la cartella dei referti, i file dei referti restano solo sul telefono (lo stesso per i PDF delle ecografie senza la cartella delle ecografie).
@@ -47,7 +48,7 @@ Foto, video, immagini e PDF si sincronizzano nei due sensi con tre cartelle di D
    - impronta SHA-1 `C0:9A:D4:70:0E:6E:AE:32:16:FC:9E:00:A0:DD:FB:D3:3C:A9:41:5B`;
    - poi **Crea**. L'impronta è quella della chiave `app/debug.keystore` con cui GitHub firma l'APK.
 6. Nell'app: **Impostazioni → Google Drive → Collega**. Google avvisa che l'app non è verificata: tocca **Avanzate → Vai a Pancy** e consenti. È normale per un'app personale non pubblicata sul Play Store.
-7. Scegli la cartella delle foto e, se vuoi, quella delle ecografie e quella dei referti (tutte diverse fra loro).
+7. Scegli la cartella delle foto e, se vuoi, quelle delle ecografie, dei referti e di mamma e papà (tutte diverse fra loro).
 
 ### Come funziona
 - Autorizzazione con `AuthorizationClient` di Google Play services e ambito `https://www.googleapis.com/auth/drive`. Le chiamate all'API REST v3 di Drive sono in `Drive.kt`.
@@ -62,6 +63,17 @@ Foto, video, immagini e PDF si sincronizzano nei due sensi con tre cartelle di D
 - Su Drive l'app salva la didascalia nella descrizione del file e, come proprietà private, la data (`pancyData`), il giorno dell'ecografia (`pancyEcografia`) e, per i referti, id, tipo e titolo (`pancyReferto`, `pancyTipo`, `pancyTitolo`, al massimo 124 byte ciascuna). Così, reinstallando l'app, tutto torna al suo posto. Esito e note dei referti tornano con il backup di Android.
 - Un file mancante su Drive si toglie dall'app solo se la sua cartella è stata letta in quella sincronizzazione.
 - Le immagini della cartella Ecografie si collegano all'ecografia dello stesso giorno, che l'app crea se manca (con il titolo dell'appuntamento in agenda, se c'è).
+
+## Backup dei dati
+Dati e impostazioni si salvano da soli su Google Drive, così una reinstallazione non fa ripartire da zero.
+- **Cosa c'è**: tutti i file JSON (appuntamenti, ecografie, referti, pesi, consigli, conversazioni con l'IA e, di `media.json`, le voci dei file che sono su Drive) e le preferenze `pancy` (data presunta del parto, peso iniziale, calendario, cartelle di Drive scelte…). Non ci sono la chiave di OpenAI, i file di foto, video e PDF (tornano dalle loro cartelle), le foto allegate alla chat e i vocali. Composizione e ripristino in `Backup.kt`.
+- **Dove**: un file in "Il mio Drive" chiamato `Pancy - backup dei dati (non cancellare).json`, riconosciuto dalle proprietà private `pancyBackup=1` e `pancySalvato` (il momento del salvataggio). Ogni backup si carica come file nuovo e poi si eliminano quelli vecchi.
+- **Quando**: 8 secondi dopo ogni salvataggio o impostazione cambiata (le modifiche ravvicinate vanno in un backup solo), subito quando l'app va in secondo piano, e con «Fai il backup ora» nelle impostazioni.
+- **Dopo una reinstallazione**: si ricollega Google Drive e, se il telefono è vuoto, il backup si recupera da solo (con le cartelle scelte), poi parte la sincronizzazione delle foto.
+- **Backup più recente di quello che il telefono conosce** (`backupNoto`): non si sovrascrive mai. Se il telefono è vuoto si recupera; altrimenti compare una finestra: «Recupera» oppure «Tieni quelli del telefono» (e allora il backup viene sostituito).
+- **Recuperare unisce**: vince il backup, e restano gli elementi presenti solo sul telefono (per esempio un peso inserito prima di ricollegare Drive). Niente doppioni per le foto dello stesso file di Drive e per gli appuntamenti dello stesso evento del calendario.
+- **Copia in un file**: nelle impostazioni si può salvare lo stesso backup in un file (per esempio in Download) e recuperarlo da lì.
+- Il backup automatico di Android resta attivo, ma per un'app installata da GitHub non è affidabile e salva al massimo una volta al giorno.
 
 ## Chiedi all'IA (OpenAI)
 - Serve una chiave API di OpenAI, da inserire in Impostazioni → Chiedi all'IA. **Mai nel codice**: il repository è pubblico.
@@ -82,7 +94,8 @@ Foto, video, immagini e PDF si sincronizzano nei due sensi con tre cartelle di D
 - L'app non salva niente da sola: controlla gli argomenti (date AAAA-MM-GG, numeri plausibili, codici esistenti) e crea una `Proposta`, salvata nel messaggio dell'IA. Se qualcosa non va, l'IA riceve il motivo e corregge.
 - Nella chat ogni proposta è una scheda (`SchedaProposta.kt`) con i valori nuovi, quelli di prima se si modifica qualcosa, e i pulsanti «Salva» e «Annulla». Al «Salva» `Model.confermaProposta` applica solo i campi proposti ai dati di quel momento.
 - Per modificare, l'IA usa i codici del fascicolo: `A-…` appuntamenti, `E-…` ecografie, `R-…` referti. Una pesata nello stesso giorno sostituisce quella che c'era; un'ecografia nella stessa data aggiorna quella esistente; le misure si aggiungono a quelle già inserite.
-- Con `foto_allegate` (o `proponi_foto`) le foto allegate all'ultima domanda si copiano nell'ecografia, nel referto o nella sezione Foto.
+- Con `foto_allegate` (o `proponi_foto`) le foto allegate all'ultima domanda si copiano nell'ecografia, nel referto, nella sezione Foto o (con `album: "mamma_e_papa"`) nell'album Mamma e papà.
+- Nel fascicolo l'album Mamma e papà compare con il totale e al massimo le 60 foto più recenti (`MAX_ALBUM`).
 - Niente eliminazioni. Nelle domande successive l'IA vede quali proposte sono state salvate o annullate.
 
 ## Come si compila
@@ -93,7 +106,7 @@ La chiave di firma è fissa (`app/debug.keystore`), così gli aggiornamenti si i
 Nella memoria dell'app, un file JSON per sezione: `appuntamenti.json`, `ecografie.json`, `referti.json`, `media.json`, `pesi.json`, `consigli.json`, `conversazioni.json`.
 Formato comune: `{ "versione": 1, "<sezione>": [ ... ] }`. Foto, video e PDF sono nella cartella `media/` (in `media.json` i PDF hanno `"pdf": true`, i file dei referti `"referto"`), le foto allegate alla chat in `chat/`.
 Le impostazioni (data presunta del parto, peso prima della gravidanza, calendario, promemoria) sono nelle preferenze `pancy`.
-Il backup automatico di Android include tutto tranne `media/`, `chat/` (foto allegate e vocali) e `miniature/` (troppo grandi per il limite di 25 MB) e la chiave API. Con Google Drive collegato, foto e video tornano comunque da Drive.
+Oltre al backup su Drive (sopra), il backup automatico di Android include tutto tranne `media/`, `chat/` (foto allegate e vocali) e `miniature/` (troppo grandi per il limite di 25 MB) e la chiave API. Con Google Drive collegato, foto e video tornano comunque da Drive.
 
 ## Struttura del codice (`app/src/main/java/com/pancy/app`)
 | File | Cosa contiene |
@@ -107,6 +120,7 @@ Il backup automatico di Android include tutto tranne `media/`, `chat/` (foto all
 | `Galleria.kt` | copia, miniature, condivisione e apertura di foto, video e PDF |
 | `Pdf.kt` | pagine dei PDF come immagini (`PdfRenderer` di Android) |
 | `Drive.kt` | API di Google Drive e sincronizzazione nei due sensi |
+| `Backup.kt`, `BackupUI.kt` | backup di dati e impostazioni (su Drive o in un file) e ripristino |
 | `DriveUI.kt` | sezione Google Drive delle impostazioni e scelta delle cartelle |
 | `Guida.kt` | contenuti fissi dei Consigli (esami, vaccini, alimentazione, fonti) |
 | `Grafico.kt` | grafico a linea usato nello Storico |

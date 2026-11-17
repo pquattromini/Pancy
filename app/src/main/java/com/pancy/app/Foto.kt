@@ -14,7 +14,10 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -56,6 +59,7 @@ fun FotoScreen(m: Model, snack: SnackbarHostState) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
+            PulsanteAlbum(m, ALBUM_GENITORI)
             val galleria = m.galleria
             if (galleria.isEmpty()) {
                 VuotoSezione(
@@ -66,6 +70,112 @@ fun FotoScreen(m: Model, snack: SnackbarHostState) {
                 )
             } else {
                 GrigliaMedia(m, galleria) { m.vai(Schermata.Visore(it.id)) }
+            }
+        }
+    }
+}
+
+/** Nome da mostrare per un album a parte. */
+fun nomeAlbum(nome: String): String = when (nome) {
+    ALBUM_GENITORI -> "Mamma e papà"
+    else -> "Album"
+}
+
+/** Il pulsante in cima alla sezione Foto che apre l'album di mamma e papà. */
+@Composable
+private fun PulsanteAlbum(m: Model, nome: String) {
+    val cs = MaterialTheme.colorScheme
+    val quanti = m.album(nome).size
+    Card(
+        onClick = { m.vai(Schermata.Album(nome)) },
+        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = cs.secondaryContainer, contentColor = cs.onSecondaryContainer),
+    ) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Favorite, contentDescription = null, tint = cs.primary)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(nomeAlbum(nome), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    when (quanti) {
+                        0 -> "Le vostre foto e i vostri video, anche fuori dalla gravidanza"
+                        1 -> "1 foto o video"
+                        else -> "$quanti foto e video"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null)
+        }
+    }
+}
+
+/** Un album a parte (mamma e papà): foto e video divisi per mese, collegati alla loro cartella di Drive. */
+@Composable
+fun AlbumScreen(m: Model, nome: String, snack: SnackbarHostState) {
+    val cs = MaterialTheme.colorScheme
+    val aggiungi = rememberAggiuntaMedia(m, null, null, nome)
+    val lista = m.album(nome)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(nomeAlbum(nome))
+                        Text(
+                            if (lista.size == 1) "1 foto o video" else "${lista.size} foto e video",
+                            style = MaterialTheme.typography.labelMedium, color = cs.onSurfaceVariant,
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = { m.indietro() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Indietro")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.background),
+            )
+        },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = aggiungi,
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                text = { Text("Aggiungi") },
+            )
+        },
+        snackbarHost = { SnackbarHost(snack) },
+        containerColor = cs.background,
+    ) { pad ->
+        Column(Modifier.fillMaxSize().padding(pad)) {
+            AvvisoDrive(m, Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
+            if (m.importazioni > 0) InCopia()
+            if (m.driveInSync) {
+                Text(
+                    "Sincronizzo con Google Drive…", style = MaterialTheme.typography.bodySmall,
+                    color = cs.onSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
+            if (m.driveCollegato && m.cartellaFoto != null && m.cartellaGen == null) {
+                AppCard(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                    Text(
+                        "Queste foto restano solo sul telefono finché non scegli la loro cartella su Google Drive. " +
+                            "Con la cartella, quello che ci metti compare qui da solo.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    TextButton(onClick = { m.vai(Schermata.Impostazioni) }, contentPadding = PaddingValues(0.dp)) {
+                        Text("Scegli la cartella nelle Impostazioni ›", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+            if (lista.isEmpty()) {
+                VuotoSezione(
+                    painterResource(R.drawable.ic_foto),
+                    "Ancora niente",
+                    "Le foto e i video di voi due: viaggi, feste, momenti insieme, anche di prima della gravidanza. " +
+                        "Tocca «Aggiungi», oppure collega la loro cartella di Google Drive nelle Impostazioni.",
+                )
+            } else {
+                GrigliaMedia(m, lista, perMese = true) { m.vai(Schermata.Visore(it.id, album = nome)) }
             }
         }
     }
@@ -93,11 +203,11 @@ fun gruppoMedia(d: LocalDate, dpp: LocalDate?): String {
     return mese(d)
 }
 
-/** Griglia a tre colonne, divisa per settimana di gravidanza (o per mese). */
+/** Griglia a tre colonne, divisa per settimana di gravidanza (o per mese; sempre per mese con [perMese]). */
 @Composable
-fun GrigliaMedia(m: Model, lista: List<Media>, onApri: (Media) -> Unit) {
+fun GrigliaMedia(m: Model, lista: List<Media>, perMese: Boolean = false, onApri: (Media) -> Unit) {
     val dpp = m.dpp
-    val gruppi = remember(lista, dpp) { lista.groupBy { gruppoMedia(it.data, dpp) } }
+    val gruppi = remember(lista, dpp, perMese) { lista.groupBy { if (perMese) mese(it.data) else gruppoMedia(it.data, dpp) } }
     LazyVerticalGrid(
         columns = GridCells.Fixed(3),
         modifier = Modifier.fillMaxSize(),
@@ -141,11 +251,11 @@ fun GrigliaFissa(lista: List<Media>, onApri: (Media) -> Unit) {
 
 /**
  * Prepara la scelta "PDF / galleria / foto / video" e restituisce la funzione che la apre.
- * I file scelti vengono copiati nell'app, collegati a [ecografia] o a [referto] se non sono null.
+ * I file scelti vengono copiati nell'app, collegati a [ecografia], a [referto] o ad [album] se non sono null.
  * I PDF si possono aggiungere solo a ecografie e referti; ai referti niente video.
  */
 @Composable
-fun rememberAggiuntaMedia(m: Model, ecografia: String?, referto: String? = null): () -> Unit {
+fun rememberAggiuntaMedia(m: Model, ecografia: String?, referto: String? = null, album: String? = null): () -> Unit {
     val ctx = LocalContext.current
     val conPdf = ecografia != null || referto != null
     var dialogo by remember { mutableStateOf(false) }
@@ -153,7 +263,7 @@ fun rememberAggiuntaMedia(m: Model, ecografia: String?, referto: String? = null)
     var inAttesa by rememberSaveable { mutableStateOf<String?>(null) }
 
     val galleria = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
-        m.importa(uris, ecografia, referto)
+        m.importa(uris, ecografia, referto, album)
     }
     val documenti = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         m.importa(uris, ecografia, referto)
@@ -161,12 +271,12 @@ fun rememberAggiuntaMedia(m: Model, ecografia: String?, referto: String? = null)
     val foto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { _ ->
         val p = inAttesa
         inAttesa = null
-        if (p != null) m.dopoScatto(File(p), video = false, ecografia = ecografia, referto = referto)
+        if (p != null) m.dopoScatto(File(p), video = false, ecografia = ecografia, referto = referto, album = album)
     }
     val video = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { _ ->
         val p = inAttesa
         inAttesa = null
-        if (p != null) m.dopoScatto(File(p), video = true, ecografia = ecografia, referto = referto)
+        if (p != null) m.dopoScatto(File(p), video = true, ecografia = ecografia, referto = referto, album = album)
     }
 
     fun scatta(eVideo: Boolean) {
